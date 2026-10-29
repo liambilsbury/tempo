@@ -1,0 +1,39 @@
+diff --git a/kernel/sched/deadline.c b/kernel/sched/deadline.c
+index e6267bc3cb01..d8ece59d6fe4 100644
+--- a/kernel/sched/deadline.c
++++ b/kernel/sched/deadline.c
+@@ -702,23 +702,6 @@ static struct rq *dl_task_offline_migration(struct rq *rq, struct task_struct *p
+ 		double_lock_balance(rq, later_rq);
+ 	}
+ 
+-	if (p->dl.dl_non_contending || p->dl.dl_throttled) {
+-		/*
+-		 * Inactive timer is armed (or callback is running, but
+-		 * waiting for us to release rq locks). In any case, when it
+-		 * will fire (or continue), it will see running_bw of this
+-		 * task migrated to later_rq (and correctly handle it).
+-		 */
+-		sub_running_bw(&p->dl, &rq->dl);
+-		sub_rq_bw(&p->dl, &rq->dl);
+-
+-		add_rq_bw(&p->dl, &later_rq->dl);
+-		add_running_bw(&p->dl, &later_rq->dl);
+-	} else {
+-		sub_rq_bw(&p->dl, &rq->dl);
+-		add_rq_bw(&p->dl, &later_rq->dl);
+-	}
+-
+ 	/* With cpusets, the offline rebuild already moved p's bandwidth. */
+ 	if (!IS_ENABLED(CONFIG_CPUSETS)) {
+ 		dl_b = &rq->rd->dl_bw;
+@@ -732,7 +715,10 @@ static struct rq *dl_task_offline_migration(struct rq *rq, struct task_struct *p
+ 		raw_spin_unlock(&dl_b->lock);
+ 	}
+ 
++	/* Full dequeue and enqueue, so psi, uclamp and sched_info track p. */
++	deactivate_task(rq, p, 0);
+ 	set_task_cpu(p, later_rq->cpu);
++	activate_task(later_rq, p, 0);
+ 	double_unlock_balance(later_rq, rq);
+ 
+ 	return later_rq;

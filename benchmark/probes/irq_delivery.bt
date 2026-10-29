@@ -1,0 +1,30 @@
+#!/usr/bin/env bpftrace
+// trace the raise, IOAPIC routing and injection of interrupts for a qemu pid
+
+// print the header lines
+BEGIN
+{
+    printf("# tempo irq_delivery\n");
+    printf("# EV mono_ns kind a b tid\n");
+}
+
+// record a line raise
+tracepoint:kvm:kvm_set_irq
+/pid == $1/
+{
+    printf("EV %llu raise %u %d %d\n", nsecs, args.gsi, args.level, tid);
+}
+
+// record the IOAPIC pin and vector
+tracepoint:kvm:kvm_ioapic_set_irq
+/pid == $1/
+{
+    printf("EV %llu ioapic %d %u %d\n", nsecs, args.pin, (uint8)(args.e), tid);
+}
+
+// record a vector injected into a vCPU
+tracepoint:kvm:kvm_inj_virq
+/pid == $1/
+{
+    printf("EV %llu inject %u %d %d\n", nsecs, args.vector, (int32)args.reinjected, tid);
+}

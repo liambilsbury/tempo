@@ -1,0 +1,18 @@
+diff --git a/kernel/sched/deadline.c b/kernel/sched/deadline.c
+index b3da0151c43b..4e31ae6c90c4 100644
+--- a/kernel/sched/deadline.c
++++ b/kernel/sched/deadline.c
+@@ -3559,6 +3559,13 @@ static void switched_from_dl(struct rq *rq, struct task_struct *p)
+ 		if (p->dl.dl_non_contending)
+ 			sub_running_bw(&p->dl, &rq->dl);
+ 		sub_rq_bw(&p->dl, &rq->dl);
++
++		/* Past the 0-lag time: no inactive timer will release p's bandwidth. */
++		if (p->dl.dl_runtime && !dl_entity_is_special(&p->dl) &&
++		    !hrtimer_active(&p->dl.inactive_timer)) {
++			dl_task_sub_bw(p);
++			__dl_clear_params(&p->dl);
++		}
+ 	}
+ 
+ 	/*

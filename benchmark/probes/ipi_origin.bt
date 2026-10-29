@@ -1,0 +1,37 @@
+#!/usr/bin/env bpftrace
+// record the origin and target CPU of each IPI and TLB flush
+
+// print the header lines
+BEGIN
+{
+    printf("# tempo ipi_origin\n");
+    printf("# EV mono_ns kind origin_cpu target_cpu detail\n");
+    @victim = 0;
+}
+
+// record a single-target IPI, with callsite and callback as raw addresses
+tracepoint:ipi:ipi_send_cpu
+{
+    printf("EV %llu ipi %d %d 0x%llx|0x%llx\n",
+           nsecs, cpu, args.cpu, args.callsite, args.callback);
+}
+
+// record a broadcast IPI without expanding its mask
+tracepoint:ipi:ipi_send_cpumask
+{
+    printf("EV %llu ipi_mask %d -1 0x%llx|0x%llx\n",
+           nsecs, cpu, args.callsite, args.callback);
+}
+
+// record a TLB flush and its reason
+tracepoint:tlb:tlb_flush
+{
+    printf("EV %llu tlb %d -1 reason=%d,pages=%lu\n",
+           nsecs, cpu, args.reason, args.pages);
+}
+
+// clear the victim map
+END
+{
+    clear(@victim);
+}

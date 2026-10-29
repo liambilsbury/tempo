@@ -1,0 +1,175 @@
+#!/bin/busybox sh
+# run the control pipeline in the L2 guest and write its records to /dev/vda
+# shellcheck disable=SC2046
+
+/bin/busybox --install -s /bin
+mount -t proc  none /proc
+mount -t sysfs none /sys
+mount -t devtmpfs none /dev 2>/dev/null
+mkdir -p /tmp/shm /dev/shm
+mount -t tmpfs none /tmp 2>/dev/null
+mkdir -p /tmp/shm
+
+# print a tempo.<key>= value from the kernel command line
+kv() {
+    sed -n "s/.*tempo\\.$1=\\([^ ]*\\).*/\\1/p" /proc/cmdline
+}
+
+FRAMES="$(kv frames)";      : "${FRAMES:=2000}"
+PERIOD="$(kv period)";      : "${PERIOD:=1000000}"
+SLOPES="$(kv slopes)";      : "${SLOPES:=800}"
+ACTS="$(kv acts)";          : "${ACTS:=200}"
+SCHED="$(kv sched)";        : "${SCHED:=fifo}"
+PRIO="$(kv prio)";          : "${PRIO:=80}"
+CPUS="$(kv cpus)";          : "${CPUS:=}"
+LABEL="$(kv label)";        : "${LABEL:=unlabelled}"
+RECONSTRUCT="$(kv reconstruct)";        : "${RECONSTRUCT:=dense}"
+TIER="$(kv tier)";          : "${TIER:=0}"
+MODES="$(kv modes)";        : "${MODES:=0}"
+ALPHA="$(kv alpha)";        : "${ALPHA:=1.0}"
+ADAPT="$(kv adapt)";        : "${ADAPT:=off}"
+BLOCK="$(kv block)";        : "${BLOCK:=16}"
+BLOCKNS="$(kv blockns)";    : "${BLOCKNS:=0}"
+TRIGGER="$(kv trigger)";    : "${TRIGGER:=timer}"
+IRQDEV="$(kv irqdev)";      : "${IRQDEV:=/dev/ttyS1}"
+
+export MILK_SHM_DIR=/tmp/shm
+
+echo "TEMPO-L2 start label=$LABEL frames=$FRAMES period=$PERIOD sched=$SCHED cpus=$CPUS"
+echo "TEMPO-L2 recon=$RECONSTRUCT tier=$TIER modes=$MODES alpha=$ALPHA adapt=$ADAPT block=$BLOCK blockns=$BLOCKNS"
+echo "TEMPO-L2 trigger=$TRIGGER irqdev=$IRQDEV"
+echo "TEMPO-L2 kernel=$(uname -r)"
+echo "TEMPO-L2 cmdline=$(cat /proc/cmdline)"
+echo "TEMPO-L2 clocksource=$(cat /sys/devices/system/clocksource/clocksource0/current_clocksource 2>/dev/null)"
+echo "TEMPO-L2 nproc=$(nproc)"
+
+# print the guest's steal time from /proc/stat
+steal() { awk '/^cpu /{print $9}' /proc/stat; }
+STEAL_B="$(steal)"
+echo "TEMPO-L2 steal_before=$STEAL_B"
+
+GAP_DETECTOR="$(kv gap_detector)";      : "${GAP_DETECTOR:=0}"
+GAPCPU="$(kv gapcpu)";      : "${GAPCPU:=3}"
+GAPDELAY="$(kv gapdelay)";  : "${GAPDELAY:=0}"
+if [ "$GAP_DETECTOR" != 0 ]; then
+    if [ -f /lib/tempo_steal.ko ]; then
+        insmod /lib/tempo_steal.ko 2>&1 | sed -n 's/^/TEMPO-L2 insmod: /p'
+        echo "TEMPO-L2 tempo_steal=$( [ -e /proc/tempo_steal ] && echo loaded || echo ABSENT )"
+    else
+        echo "TEMPO-L2 tempo_steal=NOT-IN-IMAGE"
+    fi
+    ( [ "$GAPDELAY" != 0 ] && sleep "$GAPDELAY"
+      /bin/gap_detector --cpu "$GAPCPU" --duration-s "$GAP_DETECTOR" ) > /tmp/gap_detector.log 2>&1 &
+fi
+
+# print a --cpu flag when tempo.cpus is set
+pin() {
+    if [ -n "$CPUS" ]; then
+        echo "--cpu $1"
+    fi
+}
+
+QUALITY="$(kv quality)";    : "${QUALITY:=0}"
+if [ "$QUALITY" != 0 ]; then
+    /bin/pipeline --stage quality --tag l2q --slopes "$SLOPES" --acts "$ACTS" \
+        --modes "$MODES" --alpha "$ALPHA" --frames "$QUALITY" \
+        --sched "$SCHED" --prio "$PRIO" $(pin 1) > /tmp/quality.log 2>&1
+    QRC=$?
+    echo "TEMPO-L2 --- quality ---"
+    sed -n 's/^/TEMPO-L2 /p' /tmp/quality.log
+    if [ -b /dev/vda ]; then
+        {
+            echo "TEMPO-RESULT-V1"
+            echo "label=$LABEL"
+            echo "mode=quality"
+            echo "kernel=$(uname -r)"
+            echo "quality_rc=$QRC"
+            grep -h '^OBS ' /tmp/quality.log | sed 's/^OBS //'
+            echo "bytes=0"
+            echo "END"
+        } > /tmp/header.txt
+        dd if=/tmp/header.txt of=/dev/vda bs=4096 count=1 conv=sync 2>/dev/null
+        sync
+    fi
+    echo "TEMPO-L2 done"
+    /bin/drain
+    poweroff -f
+fi
+
+/bin/pipeline --stage telemetry --tag l2 --frames "$FRAMES" --period-ns "$PERIOD" \
+    --slopes "$SLOPES" --acts "$ACTS" --sched "$SCHED" --prio "$PRIO" \
+    --out /tmp/telemetry.bin $(pin 3) > /tmp/telemetry.log 2>&1 &
+/bin/pipeline --stage actuator --tag l2 --frames "$FRAMES" --period-ns "$PERIOD" \
+    --slopes "$SLOPES" --acts "$ACTS" --sched "$SCHED" --prio "$PRIO" \
+    $(pin 2) > /tmp/actuator.log 2>&1 &
+/bin/pipeline --stage compute --tag l2 --frames "$FRAMES" --period-ns "$PERIOD" \
+    --slopes "$SLOPES" --acts "$ACTS" --sched "$SCHED" --prio "$PRIO" \
+    --reconstruct "$RECONSTRUCT" --tier "$TIER" --modes "$MODES" --alpha "$ALPHA" \
+    --adapt "$ADAPT" --block "$BLOCK" --block-ns "$BLOCKNS" \
+    $(pin 1) > /tmp/compute.log 2>&1 &
+/bin/pipeline --stage detector --tag l2 --frames "$FRAMES" --period-ns "$PERIOD" \
+    --sched "$SCHED" --prio "$PRIO" > /tmp/detector.log 2>&1 &
+
+/bin/pipeline --stage sensor --tag l2 --frames "$FRAMES" --period-ns "$PERIOD" \
+    --slopes "$SLOPES" --acts "$ACTS" --sched "$SCHED" --prio "$PRIO" \
+    --trigger "$TRIGGER" --irq-dev "$IRQDEV" \
+    $(pin 0) > /tmp/sensor.log 2>&1
+RC=$?
+wait
+
+echo "TEMPO-L2 steal_after=$(steal)"
+echo "TEMPO-L2 sensor_rc=$RC"
+for f in sensor compute actuator telemetry detector; do
+    echo "TEMPO-L2 --- $f ---"
+    if [ -s "/tmp/$f.log" ]; then
+        sed -n 's/^/TEMPO-L2 /p' "/tmp/$f.log"
+    else
+        echo "TEMPO-L2 no output from $f"
+    fi
+done
+if [ "$GAP_DETECTOR" != 0 ]; then
+    echo "TEMPO-L2 --- gap_detector ---"
+    if [ -s /tmp/gap_detector.log ]; then
+        sed -n 's/^/TEMPO-L2 /p' /tmp/gap_detector.log
+    else
+        echo "TEMPO-L2 no output from gap_detector"
+    fi
+fi
+
+if [ -b /dev/vda ]; then
+    SZ=0
+    [ -f /tmp/telemetry.bin ] && SZ=$(stat -c %s /tmp/telemetry.bin)
+    {
+        echo "TEMPO-RESULT-V1"
+        echo "label=$LABEL"
+        echo "frames=$FRAMES"
+        echo "period_ns=$PERIOD"
+        echo "sched=$SCHED"
+        echo "kernel=$(uname -r)"
+        echo "clocksource=$(cat /sys/devices/system/clocksource/clocksource0/current_clocksource 2>/dev/null)"
+        echo "steal_before=$STEAL_B"
+        echo "steal_after=$(steal)"
+        echo "sensor_rc=$RC"
+        grep -h 'OBS det_' /tmp/detector.log 2>/dev/null | sed 's/OBS //'
+        grep -h 'OBS det_' /tmp/compute.log 2>/dev/null | sed 's/OBS det_/inloop_/'
+        grep -h 'OBS modes=' /tmp/compute.log 2>/dev/null | sed 's/OBS modes=/recon_modes=/'
+        grep -h 'OBS clock_pair_' /tmp/sensor.log 2>/dev/null | sed 's/OBS //'
+        echo "recon=$RECONSTRUCT"
+        echo "tier=$TIER"
+        echo "adapt=$ADAPT"
+        echo "block=$BLOCK"
+        echo "blockns=$BLOCKNS"
+        echo "bytes=$SZ"
+        echo "END"
+    } > /tmp/header.txt
+    dd if=/tmp/header.txt of=/dev/vda bs=4096 count=1 conv=sync 2>/dev/null
+    [ "$SZ" -gt 0 ] && dd if=/tmp/telemetry.bin of=/dev/vda bs=4096 seek=1 conv=notrunc 2>/dev/null
+    sync
+    echo "TEMPO-L2 wrote $SZ bytes of records to /dev/vda"
+else
+    echo "TEMPO-L2 NO /dev/vda -- records cannot be returned"
+fi
+
+echo "TEMPO-L2 done"
+/bin/drain
+poweroff -f

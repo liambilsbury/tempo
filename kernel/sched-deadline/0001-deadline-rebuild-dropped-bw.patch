@@ -1,0 +1,125 @@
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index d35ae49a991f..5295baf07f38 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -718,6 +718,9 @@ struct sched_dl_entity {
+ 	unsigned int			dl_defer_idle     : 1;
+ 	unsigned int			dl_bw_attached    : 1;
+ 
++	/* dl_bw_gen when dl_bw was last added to a root domain's total_bw */
++	unsigned long			dl_bw_gen;
++
+ 	/*
+ 	 * Bandwidth enforcement timer. Each -deadline task has its
+ 	 * own bandwidth to be enforced, thus we need one timer per task.
+diff --git a/kernel/sched/deadline.c b/kernel/sched/deadline.c
+index 0663c00c41c0..b3da0151c43b 100644
+--- a/kernel/sched/deadline.c
++++ b/kernel/sched/deadline.c
+@@ -210,6 +210,35 @@ __dl_overflow(struct dl_bw *dl_b, unsigned long cap, u64 old_bw, u64 new_bw)
+ 	       cap_scale(dl_b->bw, cap) < dl_b->total_bw - old_bw + new_bw;
+ }
+ 
++/* Bumped on each total_bw reset: a task with an older dl_bw_gen must not release its bandwidth */
++static unsigned long dl_bw_gen;
++
++/* Root domain holding p's bandwidth: task_cpu(p)'s, or an allowed active CPU's */
++static struct root_domain *dl_task_rd(struct task_struct *p)
++{
++	int cpu = task_cpu(p);
++
++	if (!cpu_active(cpu)) {
++		int active = cpumask_first_and(cpu_active_mask, p->cpus_ptr);
++
++		if (active < nr_cpu_ids)
++			cpu = active;
++	}
++	return cpu_rq(cpu)->rd;
++}
++
++/* Skip if a rebuild already dropped p's bandwidth. */
++static void dl_task_sub_bw(struct task_struct *p)
++{
++	struct root_domain *rd = dl_task_rd(p);
++	struct dl_bw *dl_b = &rd->dl_bw;
++
++	raw_spin_lock(&dl_b->lock);
++	if (READ_ONCE(p->dl.dl_bw_gen) == READ_ONCE(dl_bw_gen))
++		__dl_sub(dl_b, p->dl.dl_bw, cpumask_weight(rd->span));
++	raw_spin_unlock(&dl_b->lock);
++}
++
+ static inline
+ void __add_running_bw(u64 dl_bw, struct dl_rq *dl_rq)
+ {
+@@ -442,13 +471,9 @@ static void task_non_contending(struct sched_dl_entity *dl_se, bool dl_task)
+ 				sub_running_bw(dl_se, dl_rq);
+ 
+ 			if (!dl_task || READ_ONCE(p->__state) == TASK_DEAD) {
+-				struct dl_bw *dl_b = dl_bw_of(task_cpu(p));
+-
+ 				if (READ_ONCE(p->__state) == TASK_DEAD)
+ 					sub_rq_bw(dl_se, &rq->dl);
+-				raw_spin_lock(&dl_b->lock);
+-				__dl_sub(dl_b, dl_se->dl_bw, dl_bw_cpus(task_cpu(p)));
+-				raw_spin_unlock(&dl_b->lock);
++				dl_task_sub_bw(p);
+ 				__dl_clear_params(dl_se);
+ 			}
+ 		}
+@@ -2171,17 +2196,13 @@ static enum hrtimer_restart inactive_task_timer(struct hrtimer *timer)
+ 		goto no_task;
+ 
+ 	if (!dl_task(p) || READ_ONCE(p->__state) == TASK_DEAD) {
+-		struct dl_bw *dl_b = dl_bw_of(task_cpu(p));
+-
+ 		if (READ_ONCE(p->__state) == TASK_DEAD && dl_se->dl_non_contending) {
+ 			sub_running_bw(&p->dl, dl_rq_of_se(&p->dl));
+ 			sub_rq_bw(&p->dl, dl_rq_of_se(&p->dl));
+ 			dl_se->dl_non_contending = 0;
+ 		}
+ 
+-		raw_spin_lock(&dl_b->lock);
+-		__dl_sub(dl_b, p->dl.dl_bw, dl_bw_cpus(task_cpu(p)));
+-		raw_spin_unlock(&dl_b->lock);
++		dl_task_sub_bw(p);
+ 		__dl_clear_params(dl_se);
+ 
+ 		goto unlock;
+@@ -3444,6 +3465,7 @@ void dl_add_task_root_domain(struct task_struct *p)
+ 
+ 	raw_spin_lock(&dl_b->lock);
+ 	__dl_add(dl_b, p->dl.dl_bw, cpumask_weight(rq->rd->span));
++	WRITE_ONCE(p->dl.dl_bw_gen, dl_bw_gen);
+ 	raw_spin_unlock(&dl_b->lock);
+ 	raw_spin_unlock_irqrestore(&p->pi_lock, rf.flags);
+ }
+@@ -3491,6 +3513,7 @@ void dl_clear_root_domain(struct root_domain *rd)
+ 	 * loop will add dl-servers contributions back properly,
+ 	 */
+ 	rd->dl_bw.total_bw = 0;
++	WRITE_ONCE(dl_bw_gen, dl_bw_gen + 1);
+ 	for_each_cpu(i, rd->span)
+ 		cpu_rq(i)->dl.extra_bw = cpu_rq(i)->dl.max_bw;
+ 
+@@ -3804,9 +3827,11 @@ int sched_dl_overflow(struct task_struct *p, int policy,
+ 
+ 	if (dl_policy(policy) && !task_has_dl_policy(p) &&
+ 	    !__dl_overflow(dl_b, cap, 0, new_bw)) {
+-		if (hrtimer_active(&p->dl.inactive_timer))
++		if (hrtimer_active(&p->dl.inactive_timer) &&
++		    READ_ONCE(p->dl.dl_bw_gen) == READ_ONCE(dl_bw_gen))
+ 			__dl_sub(dl_b, p->dl.dl_bw, cpus);
+ 		__dl_add(dl_b, new_bw, cpus);
++		WRITE_ONCE(p->dl.dl_bw_gen, READ_ONCE(dl_bw_gen));
+ 		err = 0;
+ 	} else if (dl_policy(policy) && task_has_dl_policy(p) &&
+ 		   !__dl_overflow(dl_b, cap, p->dl.dl_bw, new_bw)) {
+@@ -3819,6 +3844,7 @@ int sched_dl_overflow(struct task_struct *p, int policy,
+ 		 */
+ 		__dl_sub(dl_b, p->dl.dl_bw, cpus);
+ 		__dl_add(dl_b, new_bw, cpus);
++		WRITE_ONCE(p->dl.dl_bw_gen, READ_ONCE(dl_bw_gen));
+ 		dl_change_utilization(p, new_bw);
+ 		err = 0;
+ 	} else if (!dl_policy(policy) && task_has_dl_policy(p)) {

@@ -1,0 +1,13 @@
+#cloud-config
+users:
+  - name: tempo
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    groups: [kvm]
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - __SSH_PUBKEY__
+package_update: true
+packages: [build-essential, cmake, pkg-config, git, python3, qemu-system-x86, bpftrace, busybox-static, cpio, file, curl, bc]
+runcmd:
+  - [sh, -c, "echo 'options kvm_amd nested=1' > /etc/modprobe.d/kvm-nested.conf"]
+  - [touch, /var/lib/cloud/instance/tempo-ready]

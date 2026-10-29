@@ -1,0 +1,57 @@
+#!/usr/bin/env bpftrace
+// count VM exits and their time outside the guest by bucket, vCPU and reason for a qemu pid
+
+// print the header and the attach time
+BEGIN
+{
+    printf("# tempo vmexit\n");
+    @attach_ns = nsecs;
+}
+
+// record an exit
+tracepoint:kvm:kvm_exit
+/pid == $1/
+{
+    $r = (uint64)args.exit_reason;
+    if (args.isa == 1) {
+        $r = $r & 0xffff;
+    } else if (args.isa == 2) {
+        if ($r == 0x7c) {
+            $r = $r | ((args.info1 & 1) << 16);
+        } else if ($r == 0x400) {
+            $r = $r | (((args.info1 >> 3) & 1) << 16);
+        }
+    }
+    @exits[nsecs / 100000000, args.vcpu_id, $r] = count();
+    @isa[args.isa] = count();
+    @scratch_t[tid] = nsecs;
+    @scratch_r[tid] = $r;
+    @scratch_v[tid] = args.vcpu_id;
+}
+
+// count exits by any other VM
+tracepoint:kvm:kvm_exit
+/pid != $1/
+{
+    @foreign[pid] = count();
+}
+
+// add the time from an exit to the entry that closes it
+tracepoint:kvm:kvm_entry
+/pid == $1 && @scratch_t[tid] != 0/
+{
+    @exit_ns[@scratch_t[tid] / 100000000, @scratch_v[tid], @scratch_r[tid]] =
+        sum(nsecs - @scratch_t[tid]);
+    delete(@scratch_t[tid]);
+    delete(@scratch_r[tid]);
+    delete(@scratch_v[tid]);
+}
+
+// record the end time and clear the scratch maps
+END
+{
+    @end_ns = nsecs;
+    clear(@scratch_t);
+    clear(@scratch_r);
+    clear(@scratch_v);
+}
