@@ -1,14 +1,10 @@
 #!/usr/bin/env bpftrace
-// count VM exits and their time outside the guest by bucket, vCPU and reason for a qemu pid
-
-// print the header and the attach time
 BEGIN
 {
     printf("# tempo vmexit\n");
     @attach_ns = nsecs;
 }
 
-// record an exit
 tracepoint:kvm:kvm_exit
 /pid == $1/
 {
@@ -29,14 +25,12 @@ tracepoint:kvm:kvm_exit
     @scratch_v[tid] = args.vcpu_id;
 }
 
-// count exits by any other VM
 tracepoint:kvm:kvm_exit
 /pid != $1/
 {
     @foreign[pid] = count();
 }
 
-// add the time from an exit to the entry that closes it
 tracepoint:kvm:kvm_entry
 /pid == $1 && @scratch_t[tid] != 0/
 {
@@ -47,7 +41,6 @@ tracepoint:kvm:kvm_entry
     delete(@scratch_v[tid]);
 }
 
-// record the end time and clear the scratch maps
 END
 {
     @end_ns = nsecs;

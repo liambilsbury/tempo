@@ -1,19 +1,4 @@
 #!/usr/bin/env python3
-"""Apply the virtualisation levels' pilot selection rule
-
-Usage: levels_select.py --select PILOT [--record FILE] [--prefix P] [--one-round-fallback] [--range A-B] [--variant levels2]
-       levels_select.py --coverage BATCH LABEL...
-       levels_select.py --grid [--variant levels2]
-       levels_select.py --verify-frozen SELECTION FROZEN
-       levels_select.py --selftest
-  --select PILOT        select the duty from the pilot
-  --record FILE         record the selection
-  --one-round-fallback  lowest duty when none qualifies
-  --range A-B           frames to read
-  --variant levels2     use revision 2's grid and labels
-  --coverage            runs per label covering the range
-  --grid                the grid's duties and labels
-  --verify-frozen       check revision 1's selection against its frozen record"""
 import json
 import math
 import re
@@ -21,6 +6,12 @@ import subprocess
 import sys
 from pathlib import Path
 from statistics import median
+
+USAGE = """Usage: levels_select.py --select PILOT [--record FILE] [--prefix P] [--one-round-fallback] [--range A-B] [--variant levels2]
+       levels_select.py --coverage BATCH LABEL...
+       levels_select.py --grid [--variant levels2]
+       levels_select.py --verify-frozen SELECTION FROZEN
+       levels_select.py --selftest"""
 
 GRID = (36, 38, 40, 41, 42, 43, 43.5, 44, 44.25, 44.5, 44.75, 45, 45.5, 46, 47, 48)
 GRID2 = tuple(round(42 + i / 10, 1) for i in range(11))
@@ -33,39 +24,32 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def dtxt(d):
-    """format a duty without a trailing .0"""
     return f"{d:g}"
 
 
 def pilot_arm(d, variant="levels"):
-    """return the pilot label of a duty"""
     return VARIANTS[variant][1] + "-d" + dtxt(d).replace(".", "p")
 
 
 def pilot_control(variant="levels"):
-    """return the pilot control label of a variant"""
     return VARIANTS[variant][1] + "-control"
 
 
 def need(n, fraction):
-    """return the round count a fraction of n requires, at least 1"""
     return max(1, math.ceil(n * fraction - 1e-9))
 
 
 def num(x):
-    """check that x is an int or float, excluding bool"""
     return isinstance(x, (int, float)) and not isinstance(x, bool)
 
 
 def steal_rate(a):
-    """return steal_ticks per 1000 frames, or None"""
     if not isinstance(a, dict) or not num(a.get("steal_ticks")) or not num(a.get("frames")) or a["frames"] <= 0:
         return None
     return 1000.0 * a["steal_ticks"] / a["frames"]
 
 
 def lost(a, rng):
-    """return frames lost per 1000 of the range, or None when not covered"""
     if (not isinstance(a, dict) or not num(a.get("range_lost")) or a.get("range_frames") != rng[1] - rng[0]
             or a.get("range_covered") != 1):
         return None
@@ -73,12 +57,10 @@ def lost(a, rng):
 
 
 def fmt(x):
-    """format a number to 4 significant digits, or - for None"""
     return "-" if x is None else f"{x:.4g}"
 
 
 def select(d, prefix="", rng=RANGE, variant="levels"):
-    """return the report lines, the selected duty or None, and the reason for none"""
     grid = VARIANTS[variant][0]
     rounds = [r if isinstance(r, dict) else {} for r in d.get("rounds", [])]
     n = len(rounds)
@@ -152,12 +134,11 @@ def select(d, prefix="", rng=RANGE, variant="levels"):
 
 
 def selection_text(d, prefix="", one_round_fallback=False, rng=RANGE, variant="levels"):
-    """return the selection text and the selected duty"""
     lines, chosen, reason = select(d, prefix, rng, variant)
     out = list(lines)
     if chosen is None and one_round_fallback and prefix:
-        out += [f"ONE-ROUND: the rule selected none ({reason}); the grid's lowest duty is forced so the "
-                f"one-round run's levels still run", "one_round_forced=1"]
+        out += [f"ONE-ROUND: the rule selected none ({reason}); the grid's lowest duty is forced",
+                "one_round_forced=1"]
         chosen = VARIANTS[variant][0][0]
     elif reason:
         out.append(reason)
@@ -166,34 +147,30 @@ def selection_text(d, prefix="", one_round_fallback=False, rng=RANGE, variant="l
 
 
 def record(path, text):
-    """write the selection once, or compare it with an existing one"""
     p = Path(path)
     body = [ln for ln in text.splitlines() if not ln.startswith("selected at ")]
     if p.exists():
         old = [ln for ln in p.read_text().splitlines() if not ln.startswith("selected at ")]
         if old != body:
-            print(f"levels_select: refusing -- the selection at {p} does not match the rule re-applied to the pilot "
-                  f"(recorded "
+            print(f"levels_select: refusing -- {p} differs (recorded "
                   f"{next((x for x in old if x.startswith('selected_duty=')), 'nothing')}, now "
                   f"{next((x for x in body if x.startswith('selected_duty=')), 'nothing')})", file=sys.stderr)
             return 3
-        print(f"levels_select: the selection recorded at {p} matches the rule re-applied; not rewritten")
+        print(f"levels_select: {p} matches")
         return 0
     sha = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
                          capture_output=True, text=True).stdout.strip() or "-"
     p.write_text(f"selected at {sha}\n" + "\n".join(body) + "\n")
-    print(f"levels_select: selection recorded at {p}")
+    print(f"levels_select: recorded {p}")
     return 0
 
 
 def coverage(d, labels):
-    """return the covered and total run counts over these labels"""
     per = coverage_per_arm(d, labels)
     return sum(k for k, _ in per.values()), sum(n for _, n in per.values())
 
 
 def coverage_per_arm(d, labels):
-    """return the covered and total run counts per label"""
     per = {lab: [0, 0] for lab in labels}
     for r in d.get("rounds", []) if isinstance(d, dict) else []:
         for lab in labels:
@@ -205,30 +182,25 @@ def coverage_per_arm(d, labels):
 
 
 def verify_frozen(sel_path, frozen_path):
-    """check revision 1's selection against its frozen record and the rule re-applied"""
     try:
         live = [x for x in Path(sel_path).read_text().splitlines() if not x.startswith("selected at ")]
         fz = json.loads(Path(frozen_path).read_text())
         frozen = [x for x in fz["selection_text"].splitlines() if not x.startswith("selected at ")]
     except (OSError, ValueError, KeyError, TypeError) as e:
-        print(f"levels_select: refusing -- revision 1's selection or its frozen record cannot be read ({e})",
-              file=sys.stderr)
+        print(f"levels_select: refusing -- unreadable ({e})", file=sys.stderr)
         return 3
     again = selection_text(fz, "", False, RANGE, "levels")[0].splitlines()
     if live != frozen:
-        print(f"levels_select: refusing -- {sel_path} was edited; it differs from {frozen_path}",
-              file=sys.stderr)
+        print(f"levels_select: refusing -- {sel_path} != {frozen_path}", file=sys.stderr)
         return 3
     if again != frozen:
-        print(f"levels_select: refusing -- the rule on {frozen_path} no longer gives its recorded selection",
-              file=sys.stderr)
+        print(f"levels_select: refusing -- rule != {frozen_path}", file=sys.stderr)
         return 3
-    print(f"levels_select: revision 1's selection {sel_path} is the frozen record and the rule re-applied")
+    print(f"levels_select: {sel_path} frozen ok")
     return 0
 
 
 def _pilot(per, steal=None, rounds=3, cover=None, prefix="", variant="levels"):
-    """build a pilot batch from per-duty loss, steal and coverage"""
     rs = []
     for i in range(rounds):
         r = {pilot_control(variant): {"frames": 20000, "steal_ticks": 100, "range_frames": 7000, "range_lost": 0,
@@ -242,67 +214,66 @@ def _pilot(per, steal=None, rounds=3, cover=None, prefix="", variant="levels"):
 
 
 def selftest():
-    """run the rule cases and return 1 on any failure"""
     import tempfile
     cases = []
     grid = lambda f: {dd: [f(dd)] * 3 for dd in GRID}   # noqa: E731
     base = grid(lambda dd: 50 if dd < 44.5 else 400 if dd == 44.5 else 800)
     sel = lambda *a, **k: select(*a, **k)[1]            # noqa: E731
-    cases.append(("the lowest duty in the band is chosen, a fractional one", sel(_pilot(base)) == 44.5))
-    cases.append(("a median exactly at 200 qualifies", sel(_pilot({**base, 43: [200, 250, 100]})) == 43))
-    cases.append(("just below 200 does not", sel(_pilot({**base, 43: [199, 250, 100]})) == 44.5))
-    cases.append(("exactly 600 qualifies", sel(_pilot({**base, 44.5: [600] * 3})) == 44.5))
-    cases.append(("just above 600 does not: the next duty in the band", sel(_pilot({**base, 44.5: [601] * 3, 44.75: [500] * 3})) == 44.75))
+    cases.append(("base: selected 44.5", sel(_pilot(base)) == 44.5))
+    cases.append(("d43 median=200: selected 43", sel(_pilot({**base, 43: [200, 250, 100]})) == 43))
+    cases.append(("d43 median=199: selected 44.5", sel(_pilot({**base, 43: [199, 250, 100]})) == 44.5))
+    cases.append(("d44.5 median=600: selected 44.5", sel(_pilot({**base, 44.5: [600] * 3})) == 44.5))
+    cases.append(("d44.5 median=601: selected 44.75", sel(_pilot({**base, 44.5: [601] * 3, 44.75: [500] * 3})) == 44.75))
     got = select(_pilot(grid(lambda dd: 50 if dd < 44.5 else 900)))
-    cases.append(("a jump over the band: none, 'no duty' reason", got[1] is None and "no duty in the grid" in (got[2] or "")))
+    cases.append(("jump over band: none, 'no duty in the grid'", got[1] is None and "no duty in the grid" in (got[2] or "")))
     got = select(_pilot(base, steal={dd: [100] * 3 for dd in GRID}))
-    cases.append(("in the band, steal never above the control: none, arrival reason",
+    cases.append(("steal<=control: none, 'steal did not confirm arrival'",
                   got[1] is None and "steal did not confirm arrival" in (got[2] or "")))
-    cases.append(("a steal tie is not arrival: that duty is skipped",
+    cases.append(("d44.5 steal tie: selected 44.75",
                   sel(_pilot({**base, 44.75: [400] * 3}, steal={44.5: [3000, 100, 3000]})) == 44.75))
     cover = {(dd, i): 0 for dd in GRID for i in range(3)}
     got = select(_pilot(base, cover=cover))
-    cases.append(("no window covered the range: none, coverage reason",
+    cases.append(("range_covered=0 all: none, 'did not cover'",
                   got[1] is None and "did not cover" in (got[2] or "")))
-    cases.append(("a round whose control's window missed the range gives no result (2 of 3 still enough)",
+    cases.append(("control range_covered=0 r1: 2/3, selected 44.5",
                   sel(_pilot({**base, 44.5: [400, 10, 400]}, cover={("ctl", 1): 0})) == 44.5))
-    cases.append(("results in only 1 of 3 covered rounds do not qualify",
+    cases.append(("d44.5 covered 1/3: selected 44.75",
                   sel(_pilot({**base, 44.75: [400] * 3}, cover={(44.5, 0): 0, (44.5, 1): 0})) == 44.75))
-    cases.append(("the median decides: 0, 100, 900 (mean 333) does not qualify", sel(_pilot({**base, 36: [0, 100, 900]})) == 44.5))
+    cases.append(("d36 [0,100,900]: median 100, selected 44.5", sel(_pilot({**base, 36: [0, 100, 900]})) == 44.5))
     pf = _pilot(base, prefix="one-round-")
-    cases.append(("a prefixed pilot is read through its prefix", sel(pf, "one-round-") == 44.5))
+    cases.append(("prefix one-round-: selected 44.5", sel(pf, "one-round-") == 44.5))
     t, ch = selection_text(_pilot(grid(lambda dd: 0), rounds=1, prefix="one-round-"), "one-round-", True)
-    cases.append(("a one-round run's none forces the lowest duty, marked", ch == GRID[0] and "one_round_forced=1" in t and t.endswith("selected_duty=36\n")))
+    cases.append(("one-round none: one_round_forced=1, selected_duty=36", ch == GRID[0] and "one_round_forced=1" in t and t.endswith("selected_duty=36\n")))
     t, ch = selection_text(_pilot(grid(lambda dd: 0)), "", True)
-    cases.append(("a real none is never forced", ch is None and "one_round_forced" not in t and t.endswith("selected_duty=none\n")))
-    cases.append(("labels spell a fraction with p", pilot_arm(44.25) == "pc-ldp-d44p25" and pilot_arm(45) == "pc-ldp-d45"))
+    cases.append(("none, not one-round: selected_duty=none, not forced", ch is None and "one_round_forced" not in t and t.endswith("selected_duty=none\n")))
+    cases.append(("pilot_arm(44.25)=pc-ldp-d44p25", pilot_arm(44.25) == "pc-ldp-d44p25" and pilot_arm(45) == "pc-ldp-d45"))
     with tempfile.TemporaryDirectory() as dd:
         f = Path(dd) / "sel"
         t, _ = selection_text(_pilot(base))
-        cases.append(("recorded once", record(f, t) == 0 and f.read_text().startswith("selected at ")))
-        cases.append(("a matching re-application does not rewrite", record(f, t) == 0))
+        cases.append(("record new: rc 0, 'selected at'", record(f, t) == 0 and f.read_text().startswith("selected at ")))
+        cases.append(("record match: rc 0", record(f, t) == 0))
         t2, _ = selection_text(_pilot({**base, 44.5: [900] * 3, 44.75: [300] * 3}))
         before = f.read_text()
-        cases.append(("a mismatch refuses and rewrites nothing", record(f, t2) == 3 and f.read_text() == before))
+        cases.append(("record mismatch: rc 3, file unchanged", record(f, t2) == 3 and f.read_text() == before))
     k, n = coverage(_pilot(base, cover={(44.5, 0): 0}), [pilot_arm(44.5), PILOT_CONTROL])
-    cases.append(("coverage counts covered runs", (k, n) == (5, 6)))
+    cases.append(("coverage: 5/6", (k, n) == (5, 6)))
     per = coverage_per_arm(_pilot(base, cover={(44.5, i): 0 for i in range(3)}), [pilot_arm(44.5), PILOT_CONTROL])
-    cases.append(("coverage per arm: one arm at 0 of 3 is seen, not pooled away",
+    cases.append(("coverage_per_arm: d44.5 0/3, control 3/3",
                   per == {pilot_arm(44.5): (0, 3), PILOT_CONTROL: (3, 3)}))
-    cases.append(("revision 2's grid is 42.0 to 43.0 by 0.1 with its own labels",
+    cases.append(("GRID2 42..43 step 0.1, pc-lbp-* labels",
                   GRID2 == (42, 42.1, 42.2, 42.3, 42.4, 42.5, 42.6, 42.7, 42.8, 42.9, 43)
                   and pilot_arm(42.3, "levels2") == "pc-lbp-d42p3" and pilot_control("levels2") == "pc-lbp-control"))
     g2 = {dd: [100 if dd < 42.6 else 350 if dd == 42.6 else 700] * 3 for dd in GRID2}
-    cases.append(("revision 2 selects the lowest of its grid in the band", sel(_pilot(g2, variant="levels2"), variant="levels2") == 42.6))
-    cases.append(("revision 2's pilot read as revision 1 selects nothing", sel(_pilot(g2, variant="levels2")) is None))
+    cases.append(("levels2: selected 42.6", sel(_pilot(g2, variant="levels2"), variant="levels2") == 42.6))
+    cases.append(("levels2 pilot as levels: none", sel(_pilot(g2, variant="levels2")) is None))
     t, ch = selection_text(_pilot({dd: [0] * 1 for dd in GRID2}, rounds=1, prefix="one-round-", variant="levels2"), "one-round-", True, variant="levels2")
-    cases.append(("revision 2's one-round run forces its own lowest duty", ch == 42 and t.endswith("selected_duty=42\n")))
+    cases.append(("levels2 one-round: selected_duty=42", ch == 42 and t.endswith("selected_duty=42\n")))
     g3 = {dd: [100 if dd < 42.5 else 900] * 3 for dd in GRID2}
     got = select(_pilot(g3, cover={(42.5, i): 0 for i in range(3)}, variant="levels2"), variant="levels2")
-    cases.append(("an uncovered duty above the highest covered below-band duty: the coverage reason",
+    cases.append(("levels2 d42.5 uncovered: none, 'did not cover' 42.5",
                   got[1] is None and "did not cover" in (got[2] or "") and "42.5" in (got[2] or "")))
     got = select(_pilot(g3, cover={(42, i): 0 for i in range(3)}, variant="levels2"), variant="levels2")
-    cases.append(("an uncovered duty below the highest covered below-band duty: still 'no duty'",
+    cases.append(("levels2 d42 uncovered: none, 'no duty in the grid'",
                   got[1] is None and "no duty in the grid" in (got[2] or "")))
     with tempfile.TemporaryDirectory() as dd:
         fz = _pilot(grid(lambda d: 50 if d < 44.5 else 400 if d == 44.5 else 800))
@@ -312,24 +283,23 @@ def selftest():
         fp.write_text(json.dumps(fz))
         live = Path(dd) / "sel"
         live.write_text("selected at abc1234\n" + t1)
-        cases.append(("revision 1's untouched selection passes", verify_frozen(live, fp) == 0))
+        cases.append(("verify_frozen match: rc 0", verify_frozen(live, fp) == 0))
         live.write_text("selected at abc1234\n" + t1.replace("selected_duty=44.5", "selected_duty=44"))
-        cases.append(("an edited revision-1 selection refuses", verify_frozen(live, fp) == 3))
+        cases.append(("verify_frozen edited: rc 3", verify_frozen(live, fp) == 3))
         live.unlink()
-        cases.append(("a missing revision-1 selection refuses", verify_frozen(live, fp) == 3))
+        cases.append(("verify_frozen missing: rc 3", verify_frozen(live, fp) == 3))
         fz["selection_text"] = "selected at abc1234\n" + t1.replace("selected_duty=44.5", "selected_duty=45")
         fp.write_text(json.dumps(fz))
         live.write_text(fz["selection_text"])
-        cases.append(("a frozen record the rule no longer gives refuses", verify_frozen(live, fp) == 3))
+        cases.append(("verify_frozen rule disagrees: rc 3", verify_frozen(live, fp) == 3))
     bad = [c for c, ok in cases if not ok]
     for c, ok in cases:
         print(("ok   " if ok else "FAIL ") + c)
-    print(f"levels_select selftest: {len(cases) - len(bad)}/{len(cases)}")
+    print(f"selftest {len(cases) - len(bad)}/{len(cases)}")
     return 1 if bad else 0
 
 
 def main(argv):
-    """parse the arguments and run a mode"""
     if argv == ["--selftest"]:
         return selftest()
     if argv[:1] == ["--grid"] and argv[1:] in ([], ["--variant", "levels"], ["--variant", "levels2"]):
@@ -346,7 +316,7 @@ def main(argv):
             d = {}
         per = coverage_per_arm(d, argv[2:])
         k, n = sum(a for a, _ in per.values()), sum(b for _, b in per.values())
-        print(f"window covered the range in {k}/{n} runs")
+        print(f"covered in {k}/{n} runs")
         for lab, (a, b) in per.items():
             print(f"  {lab} {a}/{b}")
         return 0
@@ -361,29 +331,29 @@ def main(argv):
             elif a in opts and rest:
                 opts[a] = rest.pop(0)
             else:
-                print(__doc__, file=sys.stderr)
+                print(USAGE, file=sys.stderr)
                 return 2
         rng = RANGE
         if opts["--range"]:
             m = re.fullmatch(r"(\d+)-(\d+)", opts["--range"])
             if not opts["--prefix"] or not m or int(m.group(1)) >= int(m.group(2)):
-                print("levels_select: refusing -- --range is a one-round run's A-B, with --prefix, A < B", file=sys.stderr)
+                print("levels_select: refusing -- --range needs --prefix, A < B", file=sys.stderr)
                 return 2
             rng = (int(m.group(1)), int(m.group(2)))
         try:
             d = json.loads(Path(path).read_text())
         except (OSError, ValueError) as e:
-            print(f"levels_select: cannot read the pilot {path} ({e})", file=sys.stderr)
+            print(f"levels_select: {path}: {e}", file=sys.stderr)
             return 1
         if opts["--variant"] not in VARIANTS:
-            print(__doc__, file=sys.stderr)
+            print(USAGE, file=sys.stderr)
             return 2
         text, _ = selection_text(d, opts["--prefix"], fallback, rng, opts["--variant"])
         print(text, end="")
         if opts["--record"]:
             return record(opts["--record"], text)
         return 0
-    print(__doc__, file=sys.stderr)
+    print(USAGE, file=sys.stderr)
     return 2
 
 

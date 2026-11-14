@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# fetch Perfetto's trace_processor_shell into third_party/perfetto
 set -euo pipefail
 PERFETTO_TAG="v58.2"
 PERFETTO_ZIP_SHA256="32c739f71b2d39721afd294c0b038f2499a44a71b5b6bcdd85b83faca0b240b9"

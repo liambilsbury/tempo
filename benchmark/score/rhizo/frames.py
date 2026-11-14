@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""Count a Rhizo run's missed frames and print its FACT line
-
-Usage: frames.py RUN_DIR
-       frames.py --selftest
-"""
 import collections
 import json
 import re
@@ -19,16 +14,16 @@ SEQ, J_SENSOR, J_ACTUATOR = 0, 5, 6
 CPU_COMPUTE = 8
 STEAL_FIELD = 8
 HEADROOM_SKIP_NS = 5_000_000_000
+USAGE = """usage: frames.py RUN_DIR
+       frames.py --selftest"""
 
 
 def read_frames(path):
-    """return the frame records of an actuator or telemetry record file"""
     raw = Path(path).read_bytes()
     return [HDR.unpack_from(raw, i) for i in range(0, len(raw) - len(raw) % HDR.size, HDR.size)]
 
 
 def read_windows(text):
-    """return every cpu's load windows in CLOCK_BOOTTIME ns"""
     rx = re.compile(r"^WIN cpu=(\d+) start_ns=(\d+) end_ns=(\d+)$")
     out = {}
     for line in text.splitlines():
@@ -39,17 +34,14 @@ def read_windows(text):
 
 
 def load_held(text):
-    """return the load threads' own cpu time summed over every cpu"""
     return sum(int(m.group(1)) for m in re.finditer(r"^CPU_LOAD cpu=\d+ .*held_ns=(\d+)$", text, re.M))
 
 
 def overlap(a0, a1, b0, b1):
-    """return the length two intervals share"""
     return max(0, min(a1, b1) - max(a0, b0))
 
 
 def union(lists):
-    """return the sorted, merged union of several interval lists"""
     out = []
     for s, e in sorted(iv for lst in lists for iv in lst):
         if out and s <= out[-1][1]:
@@ -60,7 +52,6 @@ def union(lists):
 
 
 def intersect(a, b):
-    """return the sorted intersection of two interval lists"""
     a, b, out, i, j = union([a]), union([b]), [], 0, 0
     while i < len(a) and j < len(b):
         s, e = max(a[i][0], b[j][0]), min(a[i][1], b[j][1])
@@ -74,12 +65,10 @@ def intersect(a, b):
 
 
 def windows_in(windows, a, b):
-    """return the time the windows put inside [a, b)"""
     return sum(overlap(s, e, a, b) for s, e in windows)
 
 
 def held_in(slices, a, b):
-    """return the held time the slices put inside [a, b)"""
     total = 0
     for _, ts, dur, held in slices:
         if dur > 0:
@@ -90,12 +79,10 @@ def held_in(slices, a, b):
 
 
 def epoch(frames, period):
-    """return E, frame 0's release on the sensor's absolute schedule"""
     return min(f[J_SENSOR] - f[SEQ] * period for f in frames)
 
 
 def keep_records(frames, period, n_frames):
-    """return the records kept and how many were torn"""
     inside = [f for f in frames if f[SEQ] < n_frames]
     if not inside:
         return [], len(frames)
@@ -105,12 +92,11 @@ def keep_records(frames, period, n_frames):
 
 
 def count(frames, period, n_frames, windows_by_cpu, slices, level):
-    """return the run's frame, miss, held, told and time counts"""
     if not frames:
-        raise ValueError("no frame records")
+        raise ValueError("no frames")
     kept, torn = keep_records(frames, period, n_frames)
     if not kept:
-        raise ValueError("no frame record with a seq below frames")
+        raise ValueError("no seq < frames")
     e0 = epoch(kept, period)
     recorded = {f[SEQ]: f for f in kept}
     late = {k for k, f in recorded.items() if f[J_ACTUATOR] > e0 + k * period + period}
@@ -147,7 +133,6 @@ def count(frames, period, n_frames, windows_by_cpu, slices, level):
 
 
 def kv(path):
-    """return the key=value tokens of a file, or {} when it is missing"""
     p = Path(path)
     if not p.exists():
         return {}
@@ -155,9 +140,7 @@ def kv(path):
 
 
 def steal_ns(before, after):
-    """return the guest's steal time between two aggregate /proc/stat cpu lines"""
     def ticks(text):
-        """return a snapshot's steal ticks and tick rate"""
         lines = text.strip().split("\n")
         return int(lines[0].split()[STEAL_FIELD]), int(lines[1])
     try:
@@ -168,7 +151,6 @@ def steal_ns(before, after):
 
 
 def grant_of(status_text, tid):
-    """return a thread's policy and granted runtime over period from a status sample"""
     try:
         st = json.loads(status_text)
         sessions, grants = st.get("sessions", {}), st.get("grants", {})
@@ -184,7 +166,6 @@ def grant_of(status_text, tid):
 
 
 def grant_over(texts, tid):
-    """return the policy, mean granted bandwidth and count of the status samples"""
     got = [grant_of(t, tid) for t in texts]
     if not got:
         return "none", 0, 0
@@ -193,7 +174,6 @@ def grant_over(texts, tid):
 
 
 def frame_cpu_over(texts, tid):
-    """return the median of rhizo-rtd's frame_cpu_ns for an Android thread"""
     got = []
     for t in texts:
         try:
@@ -209,7 +189,6 @@ def frame_cpu_over(texts, tid):
 
 
 def counters_span(d):
-    """return the guest's steal and uptime span over the counter files"""
     files = sorted(Path(d).glob("rtd-stat-[0-9]*.txt"))
     if len(files) < 2:
         return -1, 0
@@ -223,7 +202,6 @@ def counters_span(d):
 
 
 def headroom_facts(text):
-    """return the facts of a headroom log"""
     calls = []
     for line in text.splitlines():
         m = re.fullmatch(r"H t_ns=(\d+) rc=(-?\d+) value=(\S+) call_us=\d+", line.strip())
@@ -239,7 +217,6 @@ def headroom_facts(text):
 
 
 def rtd_facts(text, loop_ids):
-    """return the loop's paused sessions and refusals in rhizo-rtd's log"""
     opened, paused, refused = {}, 0, 0
     for line in text.splitlines():
         m = re.search(r"\bsession (\S+) opened tgid=(\d+)", line)
@@ -257,7 +234,6 @@ def rtd_facts(text, loop_ids):
 
 
 def run_facts(d):
-    """read a run directory and return its facts"""
     d = Path(d)
     conf = kv(d / "run.conf")
     period, level, n_frames, load_cpus = int(conf["period_ns"]), conf["level"], int(conf["frames"]), int(conf["load_cpus"])
@@ -309,106 +285,101 @@ def run_facts(d):
 
 
 def fact_line(f):
-    """return the FACT line paired.py reads"""
     return "FACT " + " ".join(f"{k}={v}" for k, v in f.items())
 
 
 def selftest():
-    """check every count on built records and a built run directory"""
     P, t0, MS = 10_000_000, 1_000_000_000, 1_000_000
 
     def fr(seq, lat=MS, wait=0, cpus=(0, 1, 1)):
-        """build frame seq's record"""
         t = t0 + seq * P + wait
         return (seq, t, t + 1, t + 2, t + lat, t, t + lat, *cpus, 0)
 
     def four(*spans):
-        """build the same windows on the four vCPUs"""
         return {c: list(spans) for c in range(4)}
     all10 = [fr(k) for k in range(10)]
     held3 = [fr(k) for k in range(10) if k != 3] + [fr(3, lat=3 * MS, wait=8 * MS)]
     sens3 = [[5, t0 + 3 * P, 8 * MS, 8 * MS]]
     cases = []
     c = count(all10, P, 10, {}, [], "none")
-    cases.append(("ten on-time frames under no load are all clear and none missed",
+    cases.append(("level=none, 10 on time: missed=0, clear=10",
                   (c["frames_sent"], c["missed"], c["late"], c["clear"], c["clear_labelled"]) == (10, 0, 0, 10, 0)))
     c = count(held3, P, 10, four((t0 + 3 * P, t0 + 3 * P + 8 * MS)), sens3, "vm")
-    cases.append(("a frame whose sensor was held by the load on all four vCPUs is late, missed, held and told",
+    cases.append(("vm, sensor held on 4 vCPUs: late, missed_held, labelled",
                   (c["late"], c["missed"], c["missed_held"], c["missed_held_labelled"], c["clear"], c["partial"])
                   == (1, 1, 1, 1, 9, 0)))
-    cases.append(("the load time is the four vCPUs' intersection inside the span, and the told time is summed",
+    cases.append(("vm: injected_ns=4-vCPU intersection, delayd_held_ns summed",
                   c["injected_ns"] == 8 * MS and c["delayd_held_ns"] == 8 * MS and c["span_ns"] == 10 * P))
     w3 = {c: [(t0 + 5 * P, t0 + 6 * P)] for c in range(3)}
     w3[3] = []
     c = count(all10, P, 10, w3, [], "vm")
-    cases.append(("a period inside a window on three of the four vCPUs is partial, not held",
+    cases.append(("window on vCPUs 0-2 of 4: partial",
                   (c["partial"], c["missed_held"], c["clear"], c["injected_ns"]) == (1, 0, 9, 0)))
     c = count(all10[1:], P, 10, {}, [], "none")
-    cases.append(("a dropped frame at seq 0 before the first record is counted, frames_sent from run.conf",
+    cases.append(("seq 0 dropped: dropped=1, frames_sent=10",
                   (c["frames_sent"], c["recorded"], c["dropped"], c["missed"]) == (10, 9, 1, 1)))
     c = count(all10[:9], P, 10, {}, [], "none")
-    cases.append(("a dropped frame after the last record is counted", (c["dropped"], c["missed"]) == (1, 1)))
+    cases.append(("seq 9 dropped: dropped=1", (c["dropped"], c["missed"]) == (1, 1)))
     torn5 = all10[:5] + [(5,) + fr(4)[1:6] + (t0 + 5 * P + MS,) + fr(4)[7:]] + all10[6:]
     c = count(torn5, P, 10, {}, [], "none")
-    cases.append(("a torn record (seq 5 with frame 4's sensor stamp) does not move E: only its own frame is missed",
+    cases.append(("torn seq 5: torn_records=1, E unchanged, missed=1",
                   (c["torn_records"], c["recorded"], c["dropped"], c["late"], c["missed"]) == (1, 9, 1, 0, 1)))
     c = count(all10 + [fr(10)], P, 10, {}, [], "none")
-    cases.append(("a record with seq >= frames is counted as torn and ignored",
+    cases.append(("seq >= frames: torn_records=1, ignored",
                   (c["torn_records"], c["recorded"], c["frames_sent"], c["missed"]) == (1, 10, 10, 0)))
     c = count(all10, P, 10, {}, [], "none")
-    cases.append(("a run with no torn record says torn_records=0", c["torn_records"] == 0))
+    cases.append(("no torn record: torn_records=0", c["torn_records"] == 0))
     full5 = [(t0 + 5 * P, t0 + 6 * P)]
     c = count(all10, P, 10, {0: full5, 1: full5, 2: [], 3: full5}, [], "vm")
-    cases.append(("a period with the short vCPU in the middle of the four is partial, not held",
+    cases.append(("vCPU 2 no window: partial",
                   (c["partial"], c["missed_held"], c["injected_ns"]) == (1, 0, 0)))
     c = count(all10, P, 10, {k: [(t0 + 5 * P + k * MS // 2, t0 + 5 * P + k * MS // 2 + 3 * MS)] for k in range(4)}, [], "vm")
-    cases.append(("each vCPU covering 3 ms of a period, offset so all four share 1.5 ms, is partial, not held",
+    cases.append(("4 offset 3 ms windows, 1.5 ms shared: partial",
                   (c["partial"], c["missed_held"], c["clear"], c["injected_ns"]) == (1, 0, 9, 3 * MS // 2)))
     c = count(all10, P, 10, {0: [(t0 + 5 * P, t0 + 5 * P + 3 * MS), (t0 + 5 * P + MS, t0 + 5 * P + 4 * MS)]}, [], "vm")
-    cases.append(("overlapping windows on one vCPU are not counted twice", c["injected_ns"] == 4 * MS))
+    cases.append(("overlapping windows, one vCPU: injected_ns=4 ms", c["injected_ns"] == 4 * MS))
     early = [fr(0, wait=4 * MS)] + all10[1:]
-    cases.append(("E is the minimum over frames, a late first frame does not shift it",
+    cases.append(("epoch: minimum, late frame 0 ignored",
                   epoch(early, P) == t0 and epoch(held3, P) == t0))
     c = count(early, P, 10, {}, [], "none")
-    cases.append(("a frame woken 4 ms late but done inside its period is not missed", (c["late"], c["missed"]) == (0, 0)))
+    cases.append(("wake +4 ms, done in period: not missed", (c["late"], c["missed"]) == (0, 0)))
     c = count(all10[:4] + [fr(4, lat=12 * MS)] + all10[5:], P, 10, {}, [], "none")
-    cases.append(("a frame whose actuator joined after release + P is late and missed",
+    cases.append(("actuator > release + P: late, missed",
                   (c["late"], c["missed"], c["missed_frac"]) == (1, 1, 0.1)))
     c = count(all10, P, 10, {}, [[7, t0 + 6 * P, 2 * P, 4 * MS]], "none")
-    cases.append(("a slice's held time is spread over its span: 2 ms in each of two periods", c["clear_labelled"] == 2))
+    cases.append(("slice over 2 periods: clear_labelled=2", c["clear_labelled"] == 2))
     drop3 = [fr(k) for k in range(10) if k != 3]
     c = count(drop3, P, 10, {}, [[7, t0 + 3 * P, P, 9 * MS]], "pc")
-    cases.append(("a PC-load run counts missed and told frames and no clear ones",
+    cases.append(("level=pc: missed, missed_labelled; clear=0",
                   (c["missed"], c["missed_labelled"], c["clear"], c["missed_held"], c["partial"]) == (1, 1, 0, 0, 0)))
     c = count(all10[:5] + [fr(k, cpus=(0, 2, 2)) for k in range(5, 10)], P, 10, {}, [], "none")
-    cases.append(("cpus_used counts the compute stage's distinct vCPUs", c["cpus_used"] == 2 and "pinned" not in c))
-    cases.append(("intervals intersect and unite", intersect([(0, 10), (20, 30)], [(5, 25)]) == [(5, 10), (20, 25)]
+    cases.append(("cpus_used=2, no pinned", c["cpus_used"] == 2 and "pinned" not in c))
+    cases.append(("intersect, union", intersect([(0, 10), (20, 30)], [(5, 25)]) == [(5, 10), (20, 25)]
                   and union([[(0, 10)], [(5, 15)], [(20, 30)]]) == [(0, 15), (20, 30)]))
     log = ("CPU_LOAD pid=9 cpus=0,1,2,3 duration_s=1 duty=30 slot_us=100000 rt_prio=90 clock=boottime\n"
            "CPU_LOAD cpu=3 ran_cpu_first=3 ran_cpu_last=3 windows=2 held_ns=500\n"
            "WIN cpu=3 start_ns=10 end_ns=20\nWIN cpu=1 start_ns=5 end_ns=9\nWIN cpu=3 start_ns=30 end_ns=40\n"
            "CPU_LOAD cpu=1 ran_cpu_first=1 ran_cpu_last=1 windows=1 held_ns=700\n")
-    cases.append(("read_windows reads every cpu's windows", read_windows(log) == {3: [(10, 20), (30, 40)], 1: [(5, 9)]}))
-    cases.append(("load_held sums every cpu's own cpu time", load_held(log) == 1200 and load_held("") == 0))
+    cases.append(("read_windows: per-cpu windows", read_windows(log) == {3: [(10, 20), (30, 40)], 1: [(5, 9)]}))
+    cases.append(("load_held: 1200, empty 0", load_held(log) == 1200 and load_held("") == 0))
     try:
         count([], P, 10, {}, [], "none")
-        cases.append(("no records is an error", False))
+        cases.append(("count no records: ValueError", False))
     except ValueError:
-        cases.append(("no records is an error", True))
+        cases.append(("count no records: ValueError", True))
     def status(policy, runtime, period=P, tid=7):
-        """build a rhizo-rtd status sample"""
         grants = {"900": [runtime, period]} if policy == "deadline" else {}
         return json.dumps({"grants": grants, "sessions": {"1:1": {"threads": {"900": {
             "ns_tid": tid, "policy": policy, "runtime_ns": runtime if policy == "deadline" else 0}}}}})
-    cases.append(("the compute thread's grant in one sample is found by its Android tid, as runtime over period",
+    cases.append(("grant_of by ns_tid: 0.06",
                   grant_of(status("deadline", 600000), 7) == ("deadline", 0.06) and grant_of(status("deadline", 600000), 8) == ("none", 0)))
-    cases.append(("a sample that is not json reads as no grant", grant_of("{", 7) == ("none", 0)))
+    cases.append(("grant_of invalid json: (none, 0)", grant_of("{", 7) == ("none", 0)))
     three = [status("deadline", 600000), status("deadline", 800000), status("other", 0)]
-    cases.append(("the policy is the one seen in most samples and the bandwidth the mean over every sample, 0 when not granted",
+    cases.append(("grant_over: majority policy, mean bw 0.046667",
                   grant_over(three, 7) == ("deadline", 0.046667, 3)))
-    cases.append(("a compute thread no sample has is none with no bandwidth",
+    cases.append(("grant_over tid absent: (none, 0, 2)",
                   grant_over([status("deadline", 600000, tid=9)] * 2, 7) == ("none", 0, 2)))
-    cases.append(("no samples is none with no bandwidth and no samples", grant_over([], 7) == ("none", 0, 0)))
+    cases.append(("grant_over []: (none, 0, 0)", grant_over([], 7) == ("none", 0, 0)))
     rtd = ("session 1:9 opened tgid=482 uid=10078 target_ns=11666666 tids=482\n"
            "session 1:13 opened tgid=9931 uid=10108 target_ns=10000000 tids=9931\n"
            "session 1:14 opened tgid=9934 uid=10108 target_ns=10000000 tids=9934\n"
@@ -418,21 +389,20 @@ def selftest():
            "refused tid=9934 session=-: sched_setattr grant failed, errno=1 runtime=200000 period=10000000\n"
            "refused tid=700 session=-: sched_setattr grant failed, errno=1 runtime=200000 period=10000000\n"
            "session 1:14 resumed\n")
-    cases.append(("a paused session counts only when a stage opened it, and only the loop's threads' refusals count",
+    cases.append(("rtd_facts loop ids only: (1, 1)",
                   rtd_facts(rtd, {9931, 9934, 9935, 9936}) == (1, 1)))
     reused = ("session 1:2 opened tgid=9931 uid=10108 target_ns=10000000 tids=9931\nsession 1:2 closed\n"
               "session 1:2 opened tgid=600 uid=10072 target_ns=16666667 tids=600\nsession 1:2 paused\n")
-    cases.append(("a session id opened again by another process is read as that process's",
+    cases.append(("rtd_facts reused hint session id: (0, 0)",
                   rtd_facts(reused, {9931}) == (0, 0)))
-    cases.append(("an empty log slice has no pause and no refusal", rtd_facts("", {1, 2}) == (0, 0)))
+    cases.append(("rtd_facts empty: (0, 0)", rtd_facts("", {1, 2}) == (0, 0)))
     def cpu_sample(v, tid=7):
-        """build a status sample giving a thread a frame_cpu_ns value"""
         return json.dumps({"sessions": {"1:1": {"threads": {"900": {"ns_tid": tid, "policy": "deadline", "frame_cpu_ns": v}}}}})
-    cases.append(("a float frame_cpu_ns, rhizo-rtd's mean, counts as its whole ns",
+    cases.append(("frame_cpu_over float: 734375",
                   frame_cpu_over([cpu_sample(400000), cpu_sample(500000), cpu_sample(968750.0), cpu_sample(990000.5)], 7) == 734375))
-    cases.append(("a boolean, a string or a zero frame_cpu_ns does not count",
+    cases.append(("frame_cpu_over bool/str/0: ignored",
                   frame_cpu_over([cpu_sample(True), cpu_sample("5"), cpu_sample(0), cpu_sample(300000)], 7) == 300000))
-    cases.append(("steal is read in ns from two aggregate cpu snapshots",
+    cases.append(("steal_ns: 500000000",
                   steal_ns("cpu  1 2 3 4 5 6 7 100 0 0\n100", "cpu  1 2 3 4 5 6 7 150 0 0\n100") == 500_000_000))
     with tempfile.TemporaryDirectory() as td:
         d = Path(td)
@@ -453,25 +423,25 @@ def selftest():
                                    "refused tid=8 session=-: sched_setattr grant failed, errno=1 runtime=1 period=2\n")
         (d / "vcpus-start.txt").write_text("vcpus_pinned=1\n")
         f = run_facts(d)
-        cases.append(("a run directory gives its facts, the sensor's slice watched and an unwatched one left out",
+        cases.append(("run_facts: tid 5 slice kept, tid 99 dropped",
                       f["missed_held_labelled"] == 1 and f["slices"] == 1 and f["delayd_held_ns"] == 8 * MS))
-        cases.append(("its facts have cpus_used and load_cpus and no pinned",
+        cases.append(("run_facts: cpus_used, load_cpus, no pinned",
                       f["cpus_used"] == 1 and f["load_cpus"] == 4 and "pinned" not in f and f["frames_sent"] == 10
                       and f["torn_records"] == 0))
-        cases.append(("the load is summed over the four vCPUs",
+        cases.append(("run_facts: load summed over 4 vCPUs",
                       f["load_all_windows_ns"] == 4 * 8 * MS and f["load_held_ns"] == 4 * 9 * MS and f["injected_ns"] == 8 * MS))
-        cases.append(("the seconds the run waited for the PC to settle are a fact", f["settle_s"] == 15))
-        cases.append(("a missing end snapshot reads as not idle and not pinned",
+        cases.append(("run_facts: settle_s=15", f["settle_s"] == 15))
+        cases.append(("no end snapshot: exclusive_end=0, vcpus_pinned_end=0",
                       f["exclusive_start"] == 1 and f["exclusive_end"] == 0 and f["vcpus_pinned_end"] == 0))
-        cases.append(("the FACT line has no space inside a value", all("=" in t for t in fact_line(f).split()[1:])))
-        cases.append(("a run directory reads the compute thread's grant from every numbered status sample",
+        cases.append(("fact_line: no space in values", all("=" in t for t in fact_line(f).split()[1:])))
+        cases.append(("run_facts: compute grant from rtd-status-*.json",
                       (f["compute_policy"], f["compute_grant_bw"], f["status_samples"]) == ("deadline", 0.06, 3)
                       and "compute_grant_runtime_ns" not in f))
-        cases.append(("a run directory reads its paused sessions and refusals from its slice of rhizo-rtd's log",
+        cases.append(("run_facts: sessions_paused=1, grant_refusals=1",
                       (f["sessions_paused"], f["grant_refusals"]) == (1, 1)))
-        cases.append(("a run whose recorder kept every frame lost none",
+        cases.append(("telemetry complete: recorder_lost=0",
                       (f["actuator_records"], f["telemetry_records"], f["recorder_lost"]) == (10, 10, 0)))
-        cases.append(("an old run's new facts take their defaults",
+        cases.append(("old run.conf: new-fact defaults",
                       (f["slot_us"], f["telemetry_adpf"], f["telemetry_policy"], f["compute_frame_cpu_ns"], f["loop_steal_ns"],
                        f["loop_span_ns"]) == ("100000", "off", "none", 0, -1, 0)))
         conf = (d / "run.conf").read_text()
@@ -482,22 +452,22 @@ def selftest():
                                     "901": {"ns_tid": 9, "policy": "deadline", "frame_cpu_ns": 30000}}}}}))
             (d / f"rtd-stat-{i:03d}.txt").write_text(f"cpu  1 2 3 4 5 6 7 {steal} 0 0\n100\n{up}\n")
         f2 = run_facts(d)
-        cases.append(("the compute stage's own time per frame is the median of its finish less its wake over the actuator's records",
+        cases.append(("compute_work_ns: median finish-wake = 1",
                       f2["compute_work_ns"] == 1))
-        cases.append(("the slot and the telemetry setting are copied from run.conf",
+        cases.append(("slot_us, telemetry_adpf from run.conf",
                       (f2["slot_us"], f2["telemetry_adpf"]) == ("97000", "on")))
-        cases.append(("each stage's CPU per frame is the median of rhizo-rtd's frame_cpu_ns over the samples, 0 for a stage none has",
+        cases.append(("*_frame_cpu_ns: sample median, 0 if absent",
                       f2["compute_frame_cpu_ns"] == 500000 and f2["sensor_frame_cpu_ns"] == 0))
-        cases.append(("the telemetry stage's policy is read from the samples", f2["telemetry_policy"] == "deadline"))
-        cases.append(("the guest's steal and uptime span across the first and last sample",
+        cases.append(("telemetry_policy=deadline", f2["telemetry_policy"] == "deadline"))
+        cases.append(("loop_steal_ns, loop_span_ns: first to last sample",
                       (f2["loop_steal_ns"], f2["loop_span_ns"]) == (200_000_000, 10_000_000_000)))
-        cases.append(("the new facts keep the FACT line free of spaces inside values", all("=" in t for t in fact_line(f2).split()[1:])))
-        cases.append(("a run without the headroom sampler has no headroom facts", not any(k.startswith("headroom") for k in f2)))
-        cases.append(("a run with no stage logs counts no open hint session", f2["hint_sessions_open"] == 0))
+        cases.append(("fact_line, slot/telemetry facts: no space in values", all("=" in t for t in fact_line(f2).split()[1:])))
+        cases.append(("headroom off: no headroom_* facts", not any(k.startswith("headroom") for k in f2)))
+        cases.append(("no stage logs: hint_sessions_open=0", f2["hint_sessions_open"] == 0))
         (d / "android").mkdir(exist_ok=True)
         (d / "android" / "compute.log").write_text("OBS tid=7\nOBS hint_session=open tids=1 target_ns=10000000 preferred_rate_ns=16666667\n")
         (d / "android" / "sensor.log").write_text("OBS hint_session=unsupported reason=create_failed preferred_rate_ns=0\n")
-        cases.append(("each stage log that says its hint session opened is counted, and one that failed is not",
+        cases.append(("hint_session open/unsupported: hint_sessions_open=1",
                       run_facts(d)["hint_sessions_open"] == 1))
         (d / "run.conf").write_text(conf + "slot_us=97000\ntelemetry_adpf=on\ntelemetry_tid=9\nheadroom=on\n")
         (d / "android").mkdir(exist_ok=True)
@@ -506,24 +476,24 @@ def selftest():
             + "".join(f"H t_ns={t0 + k * 250 * MS} rc=0 value={'nan' if k % 4 == 1 else 70 + k % 3} call_us=900\n" for k in range(80))
             + "H t_ns=99000000000 rc=95 value=nan call_us=3\nHEADROOM done\n")
         f4 = run_facts(d)
-        cases.append(("a headroom run counts every call, and its answers and NaNs after its first 5 s",
+        cases.append(("headroom: calls=81 answers=45 nan=15 errors=1",
                       (f4["headroom_calls"], f4["headroom_answers"], f4["headroom_nan"], f4["headroom_errors"]) == (81, 45, 15, 1)))
-        cases.append(("a headroom run's median is over its answers after its first 5 s", f4["headroom_median"] == 71.0))
-        cases.append(("the headroom facts keep the FACT line free of spaces inside values", all("=" in t for t in fact_line(f4).split()[1:])))
+        cases.append(("headroom_median=71.0", f4["headroom_median"] == 71.0))
+        cases.append(("fact_line, headroom facts: no space in values", all("=" in t for t in fact_line(f4).split()[1:])))
         (d / "android" / "headroom.log").write_text("HEADROOM error=no_symbol\n")
         f5 = run_facts(d)
-        cases.append(("a headroom run with no answer has median -1 and no done line",
+        cases.append(("headroom no answers: median=-1, done=0",
                       (f5["headroom_calls"], f5["headroom_answers"], f5["headroom_median"], f5["headroom_done"]) == (0, 0, -1, 0)))
         (d / "android" / "headroom.log").unlink()
         try:
             run_facts(d)
-            cases.append(("a headroom run with no headroom log is refused", False))
+            cases.append(("headroom.log missing: OSError", False))
         except OSError:
-            cases.append(("a headroom run with no headroom log is refused", True))
+            cases.append(("headroom.log missing: OSError", True))
         (d / "run.conf").write_text(conf + "slot_us=97000\ntelemetry_adpf=on\ntelemetry_tid=9\n")
         (d / "rtd-stat-003.txt").write_text("cpu  1 2 3 4 5 6 7 30 0 0\nx\n110.00\n")
         f3 = run_facts(d)
-        cases.append(("an unreadable counter sample gives no steal", (f3["loop_steal_ns"], f3["loop_span_ns"]) == (-1, 0)))
+        cases.append(("rtd-stat bad sample: loop_steal_ns=-1", (f3["loop_steal_ns"], f3["loop_span_ns"]) == (-1, 0)))
         (d / "run.conf").write_text(conf)
         for i, (pol, rt) in enumerate((("deadline", 500000), ("deadline", 700000), ("deadline", 600000)), 1):
             (d / f"rtd-status-{i:03d}.json").write_text(status(pol, rt))
@@ -532,41 +502,40 @@ def selftest():
         (d / "actuator.bin").write_bytes(b"".join(HDR.pack(*f) for f in all10))
         (d / "telemetry.bin").write_bytes(b"".join(HDR.pack(*f) for k, f in enumerate(all10) if k not in (2, 3, 7)))
         f = run_facts(d)
-        cases.append(("frames the actuator recorded but the telemetry recorder lost are not missed, and recorder_lost counts them",
+        cases.append(("telemetry lost 3: missed=0, recorder_lost=3",
                       (f["missed"], f["dropped"], f["recorded"], f["actuator_records"], f["telemetry_records"], f["recorder_lost"])
                       == (0, 0, 10, 10, 7, 3)))
         (d / "rtd.log").unlink()
         try:
             run_facts(d)
-            cases.append(("a run with no slice of rhizo-rtd's log is refused", False))
+            cases.append(("rtd.log missing: OSError", False))
         except OSError:
-            cases.append(("a run with no slice of rhizo-rtd's log is refused", True))
+            cases.append(("rtd.log missing: OSError", True))
         (d / "rtd.log").write_text("")
         (d / "actuator.bin").unlink()
         try:
             run_facts(d)
-            cases.append(("a run with no actuator record is refused", False))
+            cases.append(("actuator.bin missing: OSError", False))
         except OSError:
-            cases.append(("a run with no actuator record is refused", True))
+            cases.append(("actuator.bin missing: OSError", True))
     bad = [n for n, ok in cases if not ok]
     for n, ok in cases:
         print(f"{'ok' if ok else 'FAIL'} {n}")
-    print(f"frames selftest: {len(cases) - len(bad)}/{len(cases)} ok")
+    print(f"selftest {len(cases) - len(bad)}/{len(cases)} ok")
     return 1 if bad else 0
 
 
 def main(argv=None):
-    """print a run directory's FACT line, or run the selftest"""
     argv = sys.argv[1:] if argv is None else argv
     if argv == ["--selftest"]:
         return selftest()
     if len(argv) != 1:
-        print(__doc__, file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
     try:
         print(fact_line(run_facts(argv[0])))
     except (OSError, KeyError, ValueError) as e:
-        print(f"frames: {argv[0]}: {e}", file=sys.stderr)
+        print(f"{argv[0]}: {e}", file=sys.stderr)
         return 3
     return 0
 

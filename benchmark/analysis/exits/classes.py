@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Compare each interference class against control"""
-
 import argparse
 import json
 import sys
@@ -12,7 +10,6 @@ from benchmark.run.paired import median, wilcoxon  # noqa: E402
 
 
 def kv(p):
-    """parse the key=value tokens of a meta file"""
     d = {}
     if not Path(p).exists():
         return d
@@ -25,7 +22,6 @@ def kv(p):
 
 
 def guest_cpu_delta(label, i):
-    """return the guest CPU of control minus the injected run over the window"""
     c = kv(ROOT / "results" / "experiments" / f"control-r{i}" / "inject.meta")
     h = kv(ROOT / "results" / "experiments" / f"{label}-r{i}" / "inject.meta")
     try:
@@ -35,21 +31,20 @@ def guest_cpu_delta(label, i):
 
 
 def main():
-    """print the per-class comparison table"""
     ap = argparse.ArgumentParser()
     ap.add_argument("--paired", default="results/earlier_phase/paired/paired-classes.json")
     args = ap.parse_args()
 
     p = ROOT / args.paired
     if not p.exists():
-        print(f"{p} does not exist", file=sys.stderr)
+        print(f"missing {p}", file=sys.stderr)
         return 1
     rounds = json.loads(p.read_text())["rounds"]
     labels = [k for k in rounds[0] if k != "control"] if rounds else []
 
-    print(f"{len(rounds)} interleaved rounds, each class against the same control\n")
+    print(f"{len(rounds)} rounds\n")
     print(f"{'class':10} {'p99.9 delta':>13} {'wilcoxon':>9} | "
-          f"{'guest CPU lost':>15} | {'steal ticks delta':>17} {'wilcoxon':>9}")
+          f"{'guest CPU':>15} | {'steal delta':>17} {'wilcoxon':>9}")
     print("-" * 87)
 
     for label in labels:

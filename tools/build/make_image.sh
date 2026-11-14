@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# build the static L2 initramfs
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."

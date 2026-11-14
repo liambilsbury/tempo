@@ -1,4 +1,3 @@
-// sample the nanosecond and tick steal counters over a run
 #define _GNU_SOURCE
 #include <sched.h>
 #include <stdint.h>
@@ -10,14 +9,12 @@
 
 #include "steal_read.h"
 
-// a sample of the two steal counters
 struct sample {
     uint64_t mono_ns;
     uint64_t ns_steal;
     uint64_t tick_steal;
 };
 
-// return CLOCK_MONOTONIC in ns
 static uint64_t now_ns(void)
 {
     struct timespec ts;
@@ -25,7 +22,6 @@ static uint64_t now_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-// return the steal ticks from /proc/stat's cpu line
 static uint64_t tick_steal(void)
 {
     FILE *f = fopen("/proc/stat", "r");
@@ -47,7 +43,6 @@ static uint64_t tick_steal(void)
     return out;
 }
 
-// sleep, then spin until the deadline
 static void wait_until(uint64_t deadline)
 {
     for (;;) {
@@ -62,7 +57,6 @@ static void wait_until(uint64_t deadline)
     }
 }
 
-// sample both steal counters and print how far the tick counter lags
 int main(int argc, char **argv)
 {
     int cpu = 0;
@@ -86,15 +80,13 @@ int main(int argc, char **argv)
     CPU_ZERO(&set);
     CPU_SET(cpu, &set);
     if (sched_setaffinity(0, sizeof(set), &set)) {
-        fprintf(stderr, "steal_probe: cannot pin to cpu %d\n", cpu);
+        fprintf(stderr, "steal_probe: pin cpu %d failed\n", cpu);
         return 2;
     }
 
     struct steal_counter s;
     if (steal_counter_open(&s, cpu)) {
-        fprintf(stderr, "steal_probe: NO NANOSECOND COUNTER on cpu %d -- the module is not "
-                        "loaded, or paravirt steal time is off. Refusing to report zeros.\n",
-                cpu);
+        fprintf(stderr, "steal_probe: NO NANOSECOND COUNTER cpu %d\n", cpu);
         return 3;
     }
 

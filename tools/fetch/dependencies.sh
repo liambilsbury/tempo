@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# fetch and build ImageStreamIO
 set -euo pipefail
 
 IMAGESTREAMIO_URL="https://github.com/milk-org/ImageStreamIO.git"

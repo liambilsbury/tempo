@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Plan or run the one-factor configuration matrix rows the current boot supports"""
-
 import argparse
 import subprocess
 import sys
@@ -45,29 +43,27 @@ MATRIX = [
 
 
 def satisfied(need, facts):
-    """check a row's boot needs against the machine config"""
     for key, want in need.items():
         have = facts.get(key, "-")
         if want == "*":
             if have in ("unset", "-", ""):
-                return False, f"{key} is {have}, needs to be set at boot"
+                return False, f"{key}={have}, want set"
         elif have != want:
-            return False, f"{key} is {have}, needs {want}"
+            return False, f"{key}={have}, want {want}"
     return True, ""
 
 
 def main():
-    """print the plan and run the ready rows"""
     ap = argparse.ArgumentParser()
     ap.add_argument("--plan", action="store_true")
     ap.add_argument("--run", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--frames", type=int, default=60000)
     ap.add_argument("--period-ns", type=int, default=1000000)
-    ap.add_argument("--cpus", default="", help="CPUs for pinned rows")
+    ap.add_argument("--cpus", default="", help="pinned CPUs")
     args = ap.parse_args()
     if not (args.plan or args.run):
-        ap.error("choose --plan or --run")
+        ap.error("--plan or --run")
 
     facts = lib.machine_config()
     meas = lib.host_measurable()
@@ -77,16 +73,16 @@ def main():
         ok, why = satisfied(row["needs"], facts)
         (ready if ok else pending).append((row, why))
 
-    print(f"this boot: kernel={facts['kernel_preempt']} clocksource={facts['clocksource']} "
+    print(f"boot: kernel={facts['kernel_preempt']} clocksource={facts['clocksource']} "
           f"isolcpus={facts['isolcpus']} nohz_full={facts['nohz_full']} "
           f"rcu_nocbs={facts['rcu_nocbs']} governor={facts['freq_governor']}")
     print(f"measurable: {'yes' if meas['measurable'] else 'NO -- ' + meas['why']}\n")
 
-    print(f"{len(ready)} of {len(MATRIX)} rows are runnable on this boot")
+    print(f"ready {len(ready)}/{len(MATRIX)}")
     for row, _ in ready:
         print(f"  ready    {row['id']:26} {row['factor']}={row['value']}")
     print()
-    print(f"{len(pending)} rows need a different boot")
+    print(f"pending {len(pending)}")
     for row, why in pending:
         print(f"  pending  {row['id']:26} {why}")
 
@@ -94,7 +90,7 @@ def main():
         return 0
 
     if not meas["measurable"] and not args.dry_run:
-        print(f"\nmatrix: refusing to run -- {meas['why']}", file=sys.stderr)
+        print(f"\nmatrix: unmeasurable -- {meas['why']}", file=sys.stderr)
         return 3
 
     print()
@@ -113,7 +109,7 @@ def main():
         if subprocess.run(argv).returncode != 0:
             failures += 1
     if not args.dry_run:
-        print(f"\n{len(ready) - failures}/{len(ready)} rows GREEN")
+        print(f"\nGREEN {len(ready) - failures}/{len(ready)}")
     return 1 if failures else 0
 
 

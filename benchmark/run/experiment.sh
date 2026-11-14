@@ -1,22 +1,14 @@
 #!/usr/bin/env bash
-# run the control loop in L2 while injecting interference at L1, recording both sides
-#
-#   benchmark/run/experiment.sh --label wake-2k --inject wake --rate-hz 2000 --pin 8,9,10,11
-#   benchmark/run/experiment.sh --label control --inject none --pin 8,9,10,11
-#   benchmark/run/experiment.sh --label tlb-x --inject tlb --frames 30000 --inject-s 20
-#
-#   --inject-s N               inject for N seconds, default the whole loop
-#   --pin L                    host CPUs, default HOST_PINS
-#   TEMPO_NO_PROBE=1           skip the L1 IPI probe
-#   TEMPO_NO_EXIT_PROBE=1      skip the VM exit counter
-#   TEMPO_CHECK_DEDICATED=1    check the pinned cores were idle before the run
-#   TEMPO_TRIGGER=irq          frames start on a UART interrupt
-#   TEMPO_LEVEL=host           run the loop on this host with no guest
-#   TEMPO_LATE_RANGE=A-B       also report lost frames and the worst case over frames [A, B)
-#   TEMPO_SETTLE_S=N           wait up to N s for an idle host
-#   TEMPO_SLOT_US=N            hog slot in us
-#   TEMPO_KERNEL, TEMPO_GUEST_ARGS   the L2 kernel and its arguments
-#   TEMPO_RECONSTRUCT, TEMPO_TIER, TEMPO_ADAPT, TEMPO_BLOCK, TEMPO_BLOCK_NS   the loop's arms
+usage() {
+    cat <<'EOF2'
+usage: benchmark/run/experiment.sh --label NAME [--inject MODE] [--rate-hz N] [--duty PCT] [--rt-prio N]
+           [--pin L] [--frames N] [--period-ns N] [--vcpus N] [--slopes N] [--acts N] [--inject-s N]
+           [--sched P] [--kernel PATH] [--guest-args S]
+env: TEMPO_NO_PROBE TEMPO_NO_EXIT_PROBE TEMPO_CHECK_DEDICATED TEMPO_TRIGGER TEMPO_LEVEL TEMPO_LATE_RANGE
+     TEMPO_SETTLE_S TEMPO_SETTLE_LOAD TEMPO_SLOT_US TEMPO_KERNEL TEMPO_GUEST_ARGS TEMPO_RECONSTRUCT
+     TEMPO_TIER TEMPO_ADAPT TEMPO_BLOCK TEMPO_BLOCK_NS
+EOF2
+}
 set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.." || exit
@@ -55,31 +47,30 @@ while [ $# -gt 0 ]; do
         --sched) SCHED="$2"; shift 2;;
         --kernel) KERNEL="$2"; shift 2;;
         --guest-args) GUEST_ARGS="$2"; shift 2;;
-        -h|--help) sed -n '2,19p' "$0"; exit 0;;
+        -h|--help) usage; exit 0;;
         *) echo "experiment: unknown argument '$1'" >&2; exit 2;;
     esac
 done
-[ -n "$LABEL" ] || { echo "experiment: --label is required" >&2; exit 2; }
+[ -n "$LABEL" ] || { echo "experiment: no --label" >&2; exit 2; }
 LEVEL="${TEMPO_LEVEL:-guest}"
 case "$LEVEL" in
     guest) ;;
     host)
-        [ -z "$KERNEL" ] || { echo "experiment: refusing -- TEMPO_LEVEL=host takes no guest kernel: $KERNEL" >&2; exit 2; }
-        [ -z "$GUEST_ARGS" ] || { echo "experiment: refusing -- TEMPO_LEVEL=host takes no guest kernel arguments" >&2; exit 2; }
-        [ "$TRIGGER" = timer ] || { echo "experiment: refusing -- TEMPO_LEVEL=host takes only the timer trigger" >&2; exit 2; }
+        [ -z "$KERNEL" ] || { echo "experiment: refusing -- TEMPO_LEVEL=host with TEMPO_KERNEL" >&2; exit 2; }
+        [ -z "$GUEST_ARGS" ] || { echo "experiment: refusing -- TEMPO_LEVEL=host with TEMPO_GUEST_ARGS" >&2; exit 2; }
+        [ "$TRIGGER" = timer ] || { echo "experiment: refusing -- TEMPO_LEVEL=host with TEMPO_TRIGGER=$TRIGGER" >&2; exit 2; }
         NO_EXIT_PROBE=1 ;;
-    *) echo "experiment: refusing -- TEMPO_LEVEL must be guest or host, not '$LEVEL'" >&2; exit 2;;
+    *) echo "experiment: refusing -- TEMPO_LEVEL='$LEVEL'" >&2; exit 2;;
 esac
 LATE_RANGE="${TEMPO_LATE_RANGE:-}"
 if [ -n "$LATE_RANGE" ]; then
     [[ "$LATE_RANGE" =~ ^([0-9]+)-([0-9]+)$ ]] && [ "${BASH_REMATCH[1]}" -lt "${BASH_REMATCH[2]}" ] \
-        || { echo "experiment: refusing -- TEMPO_LATE_RANGE must be A-B with A < B, not '$LATE_RANGE'" >&2; exit 2; }
+        || { echo "experiment: refusing -- TEMPO_LATE_RANGE='$LATE_RANGE'" >&2; exit 2; }
 fi
 
 OUT="$ROOT/results/experiments/$LABEL"
 rm -rf "$OUT"; mkdir -p "$OUT"
 
-# print the start check of an exclusive host and its topology for host.meta
 host_assert() {
     python3 -c "
 import sys; sys.path.insert(0, '.')
@@ -87,7 +78,6 @@ from benchmark import lib
 f = lib.check_exclusive()
 print(' '.join(f'{k}={v}' for k, v in f.items() if k != 'why'))
 print('why=' + f['why'].replace(' ', '_'))
-# whether L1 is nested or single-level
 t = lib.host_topology()
 print(f\"topology={t['topology']} hypervisor_flag={t['hypervisor_flag']} detect_virt={t['detect_virt']}\")
 print('topology_why=' + t['why'].replace(' ', '_'))
@@ -129,9 +119,8 @@ IPIPROBE_RE="$(exact_re "$IPIPROBE_CMD")"
 IPIPROBE_PIDFILE="$OUT/.ipiprobe.pid"
 LEFTOVER="$(pgrep -f 'bpftrace benchmark/probes/ipi_origin.bt' | wc -l)"
 echo "leftover_ipi_probes=$LEFTOVER" > "$OUT/probe.meta.pre"
-[ "$LEFTOVER" -gt 0 ] && echo "experiment: WARNING $LEFTOVER leftover ipi probe(s) already running; left running, recorded in probe.meta" >&2
+[ "$LEFTOVER" -gt 0 ] && echo "experiment: WARNING leftover_ipi_probes=$LEFTOVER" >&2
 if [ "$NO_PROBE" = 1 ]; then
-    echo "experiment: TEMPO_NO_PROBE=1; ipi probe not started"
     : > "$OUT/l1-events.txt"
 else
     # shellcheck disable=SC2024
@@ -140,9 +129,9 @@ else
     while [ ! -s "$OUT/l1-events.txt" ] && [ "$PROBE_WAIT" -lt 30 ]; do
         sleep 1; PROBE_WAIT=$((PROBE_WAIT+1))
     done
-    [ -s "$OUT/l1-events.txt" ] || echo "experiment: WARNING probe produced nothing in ${PROBE_WAIT}s" >&2
+    [ -s "$OUT/l1-events.txt" ] || echo "experiment: WARNING probe empty" >&2
     record_exact_pid "$IPIPROBE_RE" "$IPIPROBE_PIDFILE" || \
-        echo "experiment: WARNING ipi probe pid not resolved; matches: $(count_matching "$IPIPROBE_RE")" >&2
+        echo "experiment: WARNING ipi probe matches=$(count_matching "$IPIPROBE_RE")" >&2
 fi
 
 
@@ -154,7 +143,6 @@ from benchmark import lib; json.dump(lib.cpu_snapshot(), open(sys.argv[1], 'w'))
 " "$OFF_PIN_BEFORE" 2>/dev/null
 
 if [ "$LEVEL" = host ]; then
-echo "experiment: level=host; running the loop on this host with benchmark/run/l0.sh"
 bash benchmark/run/l0.sh --label "$LABEL" --frames "$FRAMES" --period-ns "$PERIOD" \
       --sched "$SCHED" --pin "$PIN" --outdir "$OUT/l2" \
       --slopes "$SLOPES" --acts "$ACTS" \
@@ -167,15 +155,15 @@ for i in $(seq 1 600); do
     kill -0 "$L2PID" 2>/dev/null || break
     sleep 0.05
 done
-echo "experiment: host loop ready=$READY after $(echo "$i" | awk '{print $1/20}')s"
+echo "experiment: ready=$READY $(echo "$i" | awk '{print $1/20}')s"
 QPID=""
 if [ "$READY" != 1 ]; then
-    echo "experiment: the host loop never became ready; see $OUT/l0-run.log" >&2
+    echo "experiment: host loop not ready" >&2
     kill "$L2PID" 2>/dev/null
     wait "$L2PID" 2>/dev/null
     if [ "$NO_PROBE" != 1 ]; then
         stop_exact "$IPIPROBE_PIDFILE" "$IPIPROBE_RE" 2>>"$OUT/probe-stop.log" || \
-            echo "experiment: WARNING ipi probe pid not ours or not recorded; left running, see $OUT/probe-stop.log" >&2
+            echo "experiment: WARNING ipi probe not stopped" >&2
     fi
     rm -f "$IPIPROBE_PIDFILE"
     exit 4
@@ -195,7 +183,7 @@ for i in $(seq 1 60); do
     if ps -eo comm | grep -q qemu; then BOOTED=1; break; fi
     sleep 0.5
 done
-echo "experiment: qemu up after $(echo "$i" | awk '{print $1/2}')s, booted=$BOOTED"
+echo "experiment: booted=$BOOTED $(echo "$i" | awk '{print $1/2}')s"
 
 QPID=""
 for i in $(seq 1 40); do
@@ -207,15 +195,15 @@ for i in $(seq 1 40); do
     [ -n "$QPID" ] && break
     sleep 0.25
 done
-echo "experiment: qemu pid=${QPID:-none} for label=$LABEL"
+echo "experiment: qemu pid=${QPID:-none}"
 
 if [ -z "$QPID" ]; then
-    echo "experiment: no guest booted; see $OUT/l2-run.log" >&2
+    echo "experiment: no guest booted" >&2
     kill "$L2PID" 2>/dev/null
     wait "$L2PID" 2>/dev/null
     if [ "$NO_PROBE" != 1 ]; then
         stop_exact "$IPIPROBE_PIDFILE" "$IPIPROBE_RE" 2>>"$OUT/probe-stop.log" || \
-            echo "experiment: WARNING ipi probe pid not ours or not recorded; left running, see $OUT/probe-stop.log" >&2
+            echo "experiment: WARNING ipi probe not stopped" >&2
     fi
     rm -f "$IPIPROBE_PIDFILE"
     exit 4
@@ -239,10 +227,9 @@ EXIT_PROBE_CMD="$BPFTRACE_BIN benchmark/probes/vmexit.bt $QPID -o $OUT/exits.txt
 EXIT_PROBE_RE="$(exact_re "$EXIT_PROBE_CMD")"
 rm -f "$EXIT_PROBE_PIDFILE"
 if [ "$NO_EXIT_PROBE" = 1 ]; then
-    echo "experiment: TEMPO_NO_EXIT_PROBE=1; exit counter not started"
     : > "$OUT/exits.txt"
 elif [ -z "$QPID" ]; then
-    echo "experiment: WARNING no qemu pid resolved; exit counter not started" >&2
+    echo "experiment: WARNING no qemu pid" >&2
     : > "$OUT/exits.txt"
 else
     # shellcheck disable=SC2024
@@ -251,10 +238,10 @@ else
     EXIT_PROBE_ON=1
     EW=0
     while [ ! -s "$OUT/exits.txt" ] && [ "$EW" -lt 30 ]; do sleep 1; EW=$((EW+1)); done
-    [ -s "$OUT/exits.txt" ] || echo "experiment: WARNING exit counter produced nothing in ${EW}s" >&2
+    [ -s "$OUT/exits.txt" ] || echo "experiment: WARNING exit counter empty" >&2
     if ! record_exact_pid "$EXIT_PROBE_RE" "$EXIT_PROBE_PIDFILE"; then
         EXIT_PROBE_PIDS="$(pgrep -f -x "$EXIT_PROBE_RE" 2>/dev/null)"
-        echo "experiment: WARNING exit counter pid not resolved; matches: ${EXIT_PROBE_PIDS:-none}" >&2
+        echo "experiment: WARNING exit counter pids=${EXIT_PROBE_PIDS:-none}" >&2
     fi
 fi
 
@@ -299,11 +286,11 @@ if [ "$EXIT_PROBE_ON" = 1 ]; then
             sleep 2
             echo "exit_probe=on pid=$QPID" > "$OUT/exits.meta"
         else
-            echo "experiment: WARNING exit counter pid $(cat "$EXIT_PROBE_PIDFILE") not stopped; see $OUT/probe-stop.log" >&2
+            echo "experiment: WARNING exit counter not stopped" >&2
             echo "exit_probe=lost" > "$OUT/exits.meta"
         fi
     else
-        echo "experiment: WARNING exit counter pid was never recorded" >&2
+        echo "experiment: WARNING exit counter no pid" >&2
         echo "exit_probe=lost" > "$OUT/exits.meta"
     fi
     rm -f "$EXIT_PROBE_PIDFILE"
@@ -322,14 +309,14 @@ else
         sleep 2
         echo "probe=on" > "$OUT/probe.meta"
     else
-        echo "experiment: WARNING ipi probe pid not ours or not recorded; left running, see $OUT/probe-stop.log" >&2
+        echo "experiment: WARNING ipi probe not stopped" >&2
         echo "probe=lost" > "$OUT/probe.meta"
     fi
     python3 benchmark/probes/check.py --coverage "$OUT/l1-events.txt" "$OUT/inject.meta" "$OUT/l1-probe.log" \
         >> "$OUT/probe.meta" 2>"$OUT/probe_check.err"
-    [ -s "$OUT/probe_check.err" ] && echo "experiment: WARNING probe coverage check failed; see $OUT/probe_check.err" >&2
+    [ -s "$OUT/probe_check.err" ] && echo "experiment: WARNING probe coverage check failed" >&2
     grep -q '^probe_covers_inject=0$' "$OUT/probe.meta" && \
-        echo "experiment: WARNING probe record ends before the injection window or lost events" >&2
+        echo "experiment: WARNING probe_covers_inject=0" >&2
 fi
 cat "$OUT/probe.meta.pre" >> "$OUT/probe.meta"
 rm -f "$OUT/probe.meta.pre" "$IPIPROBE_PIDFILE"
@@ -355,7 +342,7 @@ print(f\"load1_end={f['load1']} why_end={f['why'].replace(' ', '_')}\")
 } >> "$OUT/host.meta"
 
 echo "experiment: l2 exit=$L2RC"
-[ -f "$OUT/l2/telemetry.bin" ] || { echo "experiment: no records came back" >&2; exit 1; }
+[ -f "$OUT/l2/telemetry.bin" ] || { echo "experiment: no telemetry" >&2; exit 1; }
 
 python3 benchmark/analysis/exits/compare.py --outdir "$OUT" --pin "$PIN" --period-ns "$PERIOD" ${LATE_RANGE:+--late-range "$LATE_RANGE"} \
     | tee "$OUT/summary.txt"

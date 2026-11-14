@@ -1,28 +1,12 @@
 #!/usr/bin/env bash
-# run a matrix row's control loop on the host with no VM
-#
-# Usage: benchmark/run/l0.sh --label x --frames 20000 --pin 8,9,10,11 --outdir <run>/l2 [row arguments]
-#   --label NAME        label written to header.txt, default unlabelled
-#   --frames N          frames to run, default 2000
-#   --period-ns N       frame period in ns, default 1000000
-#   --slopes N          slope count, default 800
-#   --acts N            actuator count, default 200
-#   --sched P           stage scheduling policy, default fifo
-#   --prio N            stage priority, default 80
-#   --pin CPUS          host cores, at least four
-#   --outdir DIR        output directory
-#   --timeout S         stop the stages after S seconds, default frames x period + 180
-#   --reconstruct M     compute stage reconstruction, default dense
-#   --tier N            compute stage tier, default 0
-#   --modes N           compute stage modes, default 0
-#   --alpha X           compute stage alpha, default 1.0
-#   --adapt M           compute stage adaptation, default off
-#   --block N           compute stage block, default 16
-#   --block-ns N        compute stage block-ns, default 0
-#   TEMPO_L0_BIN=PATH   run this binary, default build/l2/bin/pipeline
-
-
-
+usage() {
+    cat <<'EOF2'
+usage: benchmark/run/l0.sh --pin CPUS --outdir DIR [--label NAME] [--frames N] [--period-ns N]
+           [--slopes N] [--acts N] [--sched P] [--prio N] [--timeout S] [--reconstruct M] [--tier N]
+           [--modes N] [--alpha X] [--adapt M] [--block N] [--block-ns N]
+env: TEMPO_L0_BIN
+EOF2
+}
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.." || exit
 ROOT="$PWD"
@@ -49,28 +33,28 @@ while [ $# -gt 0 ]; do
         --adapt) ADAPT="$2"; shift 2;;
         --block) BLOCK="$2"; shift 2;;
         --block-ns) BLOCKNS="$2"; shift 2;;
-        -h|--help) sed -n '2,25p' "$0"; exit 0;;
+        -h|--help) usage; exit 0;;
         *) echo "run_l0: unknown argument '$1'" >&2; exit 2;;
     esac
 done
-[ -n "$OUTDIR" ] || { echo "run_l0: --outdir is required" >&2; exit 2; }
+[ -n "$OUTDIR" ] || { echo "run_l0: no --outdir" >&2; exit 2; }
 IFS=, read -ra P <<<"$PIN"
-[ "${#P[@]}" -ge 4 ] || { echo "run_l0: refusing -- --pin needs at least four host cores, got '${PIN:-none}'" >&2; exit 2; }
+[ "${#P[@]}" -ge 4 ] || { echo "run_l0: refusing -- --pin '${PIN:-none}' < 4 cores" >&2; exit 2; }
 L0_MEMLOCK_KIB=8192
 ML="$(ulimit -l)"
 if [ "$ML" != unlimited ] && [ "$ML" -lt "$L0_MEMLOCK_KIB" ]; then
-    echo "run_l0: refusing -- memlock limit is ${ML} KiB, the loop needs ${L0_MEMLOCK_KIB} KiB; raise ulimit -l" >&2
+    echo "run_l0: refusing -- memlock ${ML} < ${L0_MEMLOCK_KIB} KiB" >&2
     exit 2
 fi
 BIN="${TEMPO_L0_BIN:-$ROOT/build/l2/bin/pipeline}"
 [ -x "$BIN" ] || bash tools/build/make_image.sh >/dev/null
-[ -x "$BIN" ] || { echo "run_l0: $BIN is not built; run bash tools/build/make_image.sh" >&2; exit 2; }
+[ -x "$BIN" ] || { echo "run_l0: no $BIN" >&2; exit 2; }
 [ "$TIMEOUT" -eq 0 ] && TIMEOUT=$(( FRAMES * PERIOD / 1000000000 + 180 ))
 
 mkdir -p "$OUTDIR"
 LOGS="$OUTDIR/l0-logs"; rm -rf "$LOGS"; mkdir -p "$LOGS"
 rm -f "$OUTDIR/stages.pid" "$OUTDIR/ready" "$OUTDIR/telemetry.bin" "$OUTDIR/header.txt"
-SHM="$(mktemp -d /dev/shm/tempo-l0-XXXXXX)" || { echo "run_l0: cannot create a shm directory" >&2; exit 2; }
+SHM="$(mktemp -d /dev/shm/tempo-l0-XXXXXX)" || { echo "run_l0: no shm dir" >&2; exit 2; }
 export MILK_SHM_DIR="$SHM"
 
 PREEMPT="$(grep -oE 'PREEMPT_RT|PREEMPT_DYNAMIC|PREEMPT|VOLUNTARY' /proc/version | head -1)"
@@ -83,13 +67,10 @@ PREEMPT="$(grep -oE 'PREEMPT_RT|PREEMPT_DYNAMIC|PREEMPT|VOLUNTARY' /proc/version
     echo "sched_rt_runtime_us=$(cat /proc/sys/kernel/sched_rt_runtime_us 2>/dev/null || echo -) sched_rt_period_us=$(cat /proc/sys/kernel/sched_rt_period_us 2>/dev/null || echo -)"
 } > "$OUTDIR/kernel.meta"
 
-# print the steal field of /proc/stat
 steal() { awk '/^cpu /{print $9}' /proc/stat; }
 STEAL_B="$(steal)"
 COMMON=(--tag l0 --frames "$FRAMES" --period-ns "$PERIOD")
-# check that a pid is still one of this binary's stages
 ours() { [ -d "/proc/$1" ] && tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null | grep -qF -- "$BIN --stage"; }
-# send SIGTERM then SIGKILL to the recorded stages
 stop_stages() {
     local p
     for p in "${PIDS[@]}"; do ours "$p" && kill -TERM "$p" 2>/dev/null; done
@@ -98,7 +79,6 @@ stop_stages() {
 }
 trap 'stop_stages; rm -rf -- "$SHM"; exit 143' TERM INT
 PIDS=()
-# start a stage confined to the pins and record its pid
 start() {
     local log="$1" core="$2"; shift 2
     local pin=(); [ "$core" != - ] && pin=(--cpu "$core")
@@ -129,7 +109,7 @@ grep -q 'downstream_ready=1' "$LOGS/sensor.log" 2>/dev/null && : > "$OUTDIR/read
 RC=""
 while kill -0 "$SPID" 2>/dev/null; do
     if [ $((SECONDS - T0)) -ge "$TIMEOUT" ]; then
-        echo "run_l0: the loop is still running after ${TIMEOUT}s; stopping its stages" >&2
+        echo "run_l0: timeout ${TIMEOUT}s" >&2
         stop_stages; RC=124; break
     fi
     sleep 0.2
@@ -150,7 +130,7 @@ BAD=""
 for i in "${!RCS[@]}"; do [ "${RCS[$i]}" != 0 ] && BAD="${BAD:+$BAD; }a stage exited ${RCS[$i]}"; done
 if [ -n "$BAD" ] && [ -f "$OUTDIR/telemetry.bin" ]; then
     mv -f "$OUTDIR/telemetry.bin" "$OUTDIR/telemetry.rejected"
-    echo "run_l0: failed run: $BAD; records moved to $OUTDIR/telemetry.rejected, logs in $LOGS" >&2
+    echo "run_l0: failed: $BAD" >&2
 fi
 SZ=0; [ -f "$OUTDIR/telemetry.bin" ] && SZ=$(stat -c %s "$OUTDIR/telemetry.bin")
 {
@@ -181,11 +161,10 @@ SZ=0; [ -f "$OUTDIR/telemetry.bin" ] && SZ=$(stat -c %s "$OUTDIR/telemetry.bin")
 } > "$OUTDIR/header.txt"
 
 echo "run_l0: $LABEL  pin=$PIN frames=$FRAMES sched=$SCHED prio=$PRIO rc=$RC"
-echo "run_l0: kernel host $(uname -r) ${PREEMPT:--}"
 if [ "$SZ" -gt 0 ]; then
-    echo "run_l0: records  $OUTDIR/telemetry.bin ($SZ bytes, $((SZ / 72)) frames)"
+    echo "run_l0: frames=$((SZ / 72))"
 else
-    echo "run_l0: NO RECORDS returned; see $LOGS" >&2
+    echo "run_l0: NO RECORDS" >&2
     exit 1
 fi
 [ "$RC" = 0 ] && [ -z "$BAD" ] || exit 1

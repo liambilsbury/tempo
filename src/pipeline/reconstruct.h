@@ -1,4 +1,3 @@
-// build and apply the modal reconstruction cmd = U diag(s) V^T x in tiers of modes
 #ifndef TEMPO_RECONSTRUCT_H
 #define TEMPO_RECONSTRUCT_H
 
@@ -12,7 +11,6 @@
 #define RECONSTRUCT_TIERS 4
 #define RECONSTRUCT_ALPHA_DEFAULT 1.0
 
-// mix (tag, i, j) into 32 bits
 static inline uint32_t reconstruct_hash(uint32_t tag, uint32_t i, uint32_t j)
 {
     uint32_t x = tag * 0x9E3779B1u + i * 0x85EBCA77u + j * 0xC2B2AE3Du + 0x27D4EB2Fu;
@@ -24,7 +22,6 @@ static inline uint32_t reconstruct_hash(uint32_t tag, uint32_t i, uint32_t j)
     return x;
 }
 
-// map a hash to a value in [-1, 1)
 static inline double reconstruct_val(uint32_t tag, uint32_t i, uint32_t j)
 {
     return (double)reconstruct_hash(tag, i, j) * (2.0 / 4294967296.0) - 1.0;
@@ -33,7 +30,6 @@ static inline double reconstruct_val(uint32_t tag, uint32_t i, uint32_t j)
 #define RECONSTRUCT_TAG_V 1u
 #define RECONSTRUCT_TAG_U 2u
 
-// modal reconstruction operator
 struct reconstruct {
     long slopes, acts, modes;
     double alpha;
@@ -42,7 +38,6 @@ struct reconstruct {
     float *s;
 };
 
-// return the full rank at which the modal and dense operators cost the same
 static inline long reconstruct_auto_modes(long slopes, long acts)
 {
     long m = (acts * slopes) / (slopes + acts);
@@ -50,20 +45,17 @@ static inline long reconstruct_auto_modes(long slopes, long acts)
     return m;
 }
 
-// return the modes a tier keeps
 static inline long reconstruct_tier_modes(const struct reconstruct *r, int tier)
 {
     long m = r->modes >> (tier < 0 ? 0 : tier);
     return m < 1 ? 1 : m;
 }
 
-// return a tier's multiply-accumulates
 static inline long reconstruct_tier_macs(const struct reconstruct *r, int tier)
 {
     return reconstruct_tier_modes(r, tier) * (r->slopes + r->acts);
 }
 
-// fill the operator from the hash
 static inline int reconstruct_init(struct reconstruct *r, long slopes, long acts, long modes, double alpha)
 {
     r->slopes = slopes;
@@ -87,14 +79,12 @@ static inline int reconstruct_init(struct reconstruct *r, long slopes, long acts
     return 0;
 }
 
-// free the operator
 static inline void reconstruct_free(struct reconstruct *r)
 {
     free(r->vt); free(r->u); free(r->s);
     r->vt = r->u = r->s = NULL;
 }
 
-// per-frame deadline and run counters for the in-loop detector
 struct reconstruct_budget {
     uint64_t deadline_ns;
     int enforce;
@@ -107,7 +97,6 @@ struct reconstruct_budget {
     long gap_n, blocks, stopped_frames;
 };
 
-// run a frame's reconstruction in blocks, return the modes completed
 static inline long reconstruct_apply_blocks(struct reconstruct *r, long m_max, long blk, const float *x,
                                       float *cmd, struct reconstruct_budget *b)
 {
@@ -178,13 +167,11 @@ static inline long reconstruct_apply_blocks(struct reconstruct *r, long m_max, l
     return done;
 }
 
-// run a frame's reconstruction at a fixed tier
 static inline void reconstruct_apply(struct reconstruct *r, int tier, long blk, const float *x, float *cmd)
 {
     reconstruct_apply_blocks(r, reconstruct_tier_modes(r, tier), blk, x, cmd, NULL);
 }
 
-// fill the deterministic stimulus for a frame
 static inline void reconstruct_stimulus(float *payload, long n, uint64_t seq)
 {
     for (long i = 0; i < n; i++)
@@ -193,7 +180,6 @@ static inline void reconstruct_stimulus(float *payload, long n, uint64_t seq)
 
 #define RECONSTRUCT_STIM_PERIOD 1024
 
-// return a tier's relative L2 error against tier 0 over nstim stimuli
 static inline double reconstruct_tier_relerr(struct reconstruct *r, int tier, long nstim, long blk,
                                        float *x, float *ref, float *got)
 {
@@ -211,7 +197,6 @@ static inline double reconstruct_tier_relerr(struct reconstruct *r, int tier, lo
     return den > 0.0 ? sqrt(num / den) : 0.0;
 }
 
-// fill curve[m] with the relative error of stopping after m modes
 static inline void reconstruct_relerr_curve(struct reconstruct *r, long nstim, float *x, float *prefix,
                                       double *num, double *curve)
 {

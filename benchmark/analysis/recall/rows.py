@@ -1,4 +1,3 @@
-"""Freeze and read the per-round steal recall rows"""
 from pathlib import Path
 import json
 
@@ -9,7 +8,6 @@ FROZEN = ROOT / "results" / "earlier_phase" / "frozen" / "recall-frozen.json"
 
 
 def kv(p):
-    """parse the key=value tokens of a meta file"""
     d = {}
     if not Path(p).exists():
         return d
@@ -22,7 +20,6 @@ def kv(p):
 
 
 def scan():
-    """compute the recall rows from the experiment directories"""
     out = []
     for i in range(64):
         c = ROOT / "results" / "experiments" / f"control-r{i}"
@@ -43,7 +40,6 @@ def scan():
 
 
 def snapshot():
-    """write the scanned recall rows to the frozen file"""
     from benchmark import lib
     lib.refuse_unpublishable_experiments()
     rs = scan()
@@ -53,7 +49,6 @@ def snapshot():
 
 
 def rows():
-    """return the frozen recall rows, or scan when there is no frozen file"""
     if FROZEN.exists():
         return json.loads(FROZEN.read_text())["rounds"]
     return scan()
@@ -61,4 +56,4 @@ def rows():
 
 if __name__ == "__main__":
     rs = snapshot()
-    print(f"froze {len(rs)} rounds to {FROZEN}")
+    print(f"froze {len(rs)} -> {FROZEN}")

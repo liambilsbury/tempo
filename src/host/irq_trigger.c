@@ -1,4 +1,3 @@
-// write a byte to L2's second UART socket at a fixed period, from L1
 #define _GNU_SOURCE
 #include <errno.h>
 #include <stdint.h>
@@ -10,7 +9,6 @@
 #include <time.h>
 #include <unistd.h>
 
-// return CLOCK_MONOTONIC in ns
 static uint64_t now_ns(void)
 {
     struct timespec ts;
@@ -18,7 +16,6 @@ static uint64_t now_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-// sleep until an absolute CLOCK_MONOTONIC deadline
 static void wait_until(uint64_t deadline_ns)
 {
     struct timespec ts = {.tv_sec = (time_t)(deadline_ns / 1000000000ull),
@@ -27,14 +24,13 @@ static void wait_until(uint64_t deadline_ns)
         ;
 }
 
-// connect to the UNIX socket, retrying for 30 s
 static int connect_sock(const char *path)
 {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) { perror("irq_trigger: socket"); exit(2); }
     struct sockaddr_un a = {.sun_family = AF_UNIX};
     if (strlen(path) >= sizeof(a.sun_path)) {
-        fprintf(stderr, "irq_trigger: socket path too long: %s\n", path);
+        fprintf(stderr, "irq_trigger: path too long: %s\n", path);
         exit(2);
     }
     strcpy(a.sun_path, path);
@@ -44,11 +40,10 @@ static int connect_sock(const char *path)
         struct timespec ts = {.tv_sec = 0, .tv_nsec = 500000000L};
         nanosleep(&ts, NULL);
     }
-    fprintf(stderr, "irq_trigger: could not connect to %s: %s\n", path, strerror(errno));
+    fprintf(stderr, "irq_trigger: connect %s: %s\n", path, strerror(errno));
     exit(2);
 }
 
-// connect, write a byte per period for the duration and print the counts
 int main(int argc, char **argv)
 {
     const char *sock_path = NULL;

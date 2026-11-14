@@ -1,4 +1,3 @@
-// build src/pipeline/pipeline.c for android with an ADPF hint session
 #define _GNU_SOURCE
 #include <stdbool.h>
 #include <android/performance_hint.h>
@@ -24,7 +23,6 @@ static uint64_t hint_frame_t0;
 static uint64_t hint_reports, hint_errors;
 static int hint_last_rc;
 
-// return CLOCK_BOOTTIME in ns
 static uint64_t boottime_ns(void)
 {
     struct timespec ts;
@@ -34,7 +32,6 @@ static uint64_t boottime_ns(void)
 
 #define obs(...) (printf(__VA_ARGS__), fflush(stdout))
 
-// print the hint counts and close the performance hint handle
 static void hint_close(void)
 {
     if (!hint_session)
@@ -45,7 +42,6 @@ static void hint_close(void)
     hint_session = NULL;
 }
 
-// open a hint session on the calling thread
 static void hint_open(void)
 {
     if (!hint_wanted)
@@ -67,7 +63,6 @@ static void hint_open(void)
     atexit(hint_close);
 }
 
-// print the stage's thread id and open the hint session
 static int hint_mlockall(int flags)
 {
     int rc = mlockall(flags);
@@ -78,7 +73,6 @@ static int hint_mlockall(int flags)
     return rc;
 }
 
-// start a frame's work when the stage wakes for it
 static int hint_semtimedwait(IMAGE *im, int index, const struct timespec *ts)
 {
     int rc = ImageStreamIO_semtimedwait(im, index, ts);
@@ -87,7 +81,6 @@ static int hint_semtimedwait(IMAGE *im, int index, const struct timespec *ts)
     return rc;
 }
 
-// start the sensor's frame when its timer fires
 static int hint_clock_nanosleep(clockid_t clk, int flags, const struct timespec *req, struct timespec *rem)
 {
     int rc = clock_nanosleep(clk, flags, req, rem);
@@ -96,7 +89,6 @@ static int hint_clock_nanosleep(clockid_t clk, int flags, const struct timespec 
     return rc;
 }
 
-// report a frame's work to the hint session
 static void hint_report_frame(void)
 {
     if (!hint_session || !hint_frame_t0)
@@ -105,13 +97,12 @@ static void hint_report_frame(void)
     hint_reports++;
     if (r != 0) {
         if (hint_errors++ == 0)
-            fprintf(stderr, "pipeline: reportActualWorkDuration returned %d\n", r);
+            fprintf(stderr, "pipeline: reportActualWorkDuration=%d\n", r);
         hint_last_rc = r;
     }
     hint_frame_t0 = 0;
 }
 
-// end a frame's work as the stage hands the frame on
 static long hint_sempost(IMAGE *im, long index)
 {
     long rc = ImageStreamIO_sempost(im, index);
@@ -119,12 +110,11 @@ static long hint_sempost(IMAGE *im, long index)
     return rc;
 }
 
-_Static_assert(sizeof(struct frame_hdr) == 72, "struct frame_hdr is not the 72 bytes the runner and frames.py read");
+_Static_assert(sizeof(struct frame_hdr) == 72, "frame_hdr != 72 bytes");
 
 static struct frame_hdr *record_buf;
 static long record_cap, record_count, record_over;
 
-// copy a header into a stream buffer and append it to the stage's own record
 static void record_hdr_put(float *buf, const struct frame_hdr *h)
 {
     hdr_put(buf, h);
@@ -136,7 +126,6 @@ static void record_hdr_put(float *buf, const struct frame_hdr *h)
         record_over++;
 }
 
-// allocate and touch the record for frames headers, return 0 or -1
 static int record_open(long frames)
 {
     record_buf = malloc((size_t)frames * sizeof(*record_buf));
@@ -147,11 +136,10 @@ static int record_open(long frames)
     return 0;
 }
 
-// write the record as 72-byte headers to path
 static int record_write(const char *path)
 {
     if (record_over) {
-        fprintf(stderr, "pipeline: the stage put %ld headers past its record of %ld\n", record_over, record_cap);
+        fprintf(stderr, "pipeline: record over=%ld cap=%ld\n", record_over, record_cap);
         return 2;
     }
     FILE *fp = fopen(path, "wb");
@@ -161,7 +149,7 @@ static int record_write(const char *path)
     }
     size_t n = fwrite(record_buf, sizeof(*record_buf), (size_t)record_count, fp);
     if (fclose(fp) != 0 || n != (size_t)record_count) {
-        fprintf(stderr, "pipeline: writing %s failed\n", path);
+        fprintf(stderr, "pipeline: write %s failed\n", path);
         return 2;
     }
     obs("OBS actuator_records=%ld\n", record_count);
@@ -180,7 +168,6 @@ static int record_write(const char *path)
 #include "../pipeline/pipeline.c"
 #undef main
 
-// read the Android flags, then run the pipeline
 int main(int argc, char **argv)
 {
     struct android_args a;
@@ -196,7 +183,7 @@ int main(int argc, char **argv)
                                         || (a.adpf_telemetry && !strcmp(a.stage, "telemetry")));
     obs("OBS join_clock=boottime\nOBS adpf=%s\nOBS adpf_telemetry=%s\n", a.adpf ? "on" : "off", a.adpf_telemetry ? "on" : "off");
     if (a.record && record_open(a.frames) != 0) {
-        fprintf(stderr, "pipeline: cannot allocate a record of %ld frames\n", a.frames);
+        fprintf(stderr, "pipeline: record alloc %ld failed\n", a.frames);
         return 2;
     }
     int rc = pipeline_main(argc, argv);

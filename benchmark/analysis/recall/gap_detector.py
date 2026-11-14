@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Score the guest gap detector and the steal counter against L1's exit time"""
-
 import argparse
 import json
 import re
@@ -18,7 +16,6 @@ KV = re.compile(r"(\w+)=(\S+)")
 
 
 def gap_detector_of(outdir):
-    """read the detector's key=value report from the guest console"""
     con = Path(outdir) / "l2" / "console.log"
     if not con.exists():
         return {}
@@ -36,7 +33,6 @@ BUCKET_NS = 100_000_000
 
 
 def detector_buckets(ex, gapcpu):
-    """return the longest run of buckets where the detector's vCPU took no HLT exit"""
     hlt, seen = {}, set()
     for (b, v, r), n in ex["exits"].items():
         if v != gapcpu:
@@ -67,7 +63,6 @@ def detector_buckets(ex, gapcpu):
 
 
 def inject_meta(outdir):
-    """parse the key=value pairs of inject.meta"""
     d = {}
     f = Path(outdir) / "inject.meta"
     if not f.exists():
@@ -83,7 +78,6 @@ def inject_meta(outdir):
 
 
 def one(outdir, gapcpu):
-    """return the outside, offcore, detector and steal fractions of a run"""
     g, m = gap_detector_of(outdir), inject_meta(outdir)
     if not g or not m or "gap_sum_ns" not in g:
         return None
@@ -123,7 +117,6 @@ def one(outdir, gapcpu):
 
 
 def gather(paired_path, gapcpu):
-    """collect the per-round fractions of each class in a paired file"""
     rounds = json.loads((ROOT / paired_path).read_text())["rounds"]
     labels = sorted({k for r in rounds for k in r})
     out = {}
@@ -140,14 +133,12 @@ def gather(paired_path, gapcpu):
 
 
 def recalls(rows, denom="outside_frac"):
-    """return the detector and steal recalls of each row"""
     det = [r["detector_frac"] / r[denom] for r in rows if r.get(denom, 0) > 0]
     ste = [r["steal_frac"] / r[denom] for r in rows if r.get(denom, 0) > 0]
     return det, ste
 
 
 def paired_recalls(rows, ctl, denom="outside_frac"):
-    """return the detector and steal recalls with the control round subtracted"""
     det, ste = [], []
     by_round = {r["round"]: r for r in ctl}
     for r in rows:
@@ -163,7 +154,6 @@ def paired_recalls(rows, ctl, denom="outside_frac"):
 
 
 def report(data):
-    """print the recall tables and return the control-subtracted medians"""
     hdr = (f"{'class':9} {'n':>3} {'outside %':>10} {'offcore %':>10} {'detector %':>11} "
            f"{'steal %':>8} {'detector recall':>18} {'steal recall':>18}")
     print(hdr)
@@ -182,12 +172,11 @@ def report(data):
     inj = {k: v for k, v in data.items() if k != "control"}
     if ctl:
         cd = median([r["detector_frac"] for r in ctl])
-        print(f"\ndetector floor with nothing injected: {100*cd:.1f}% of its window as gaps, "
-              f"hypervisor says {100*median([r['outside_frac'] for r in ctl]):.1f}%; "
-              f"subtracted below")
+        print(f"\nfloor: detector {100*cd:.1f}% "
+              f"hypervisor {100*median([r['outside_frac'] for r in ctl]):.1f}%")
 
     print(f"\n{'class':9} {'n':>3} {'detector recall':>20} {'steal recall':>20}   "
-          f"control-subtracted")
+          f"-control")
     print("-" * 76)
     alld, alls, pairs = [], [], []
     for label, rows in inj.items():
@@ -201,32 +190,28 @@ def report(data):
         print(f"{label:9} {len(d):>3} {fmt(d):>20} {fmt(s):>20}")
 
     if alld and alls:
-        print(f"\nacross the injected classes: detector {median(alld):.2f}, "
-              f"steal {median(alls):.2f}")
+        print(f"\nall: detector {median(alld):.2f} steal {median(alls):.2f}")
         p, pos, neg = sign_test(pairs)
         w, _ = wilcoxon(pairs)
-        print(f"detector minus steal, per condition-round: median {median(pairs):+.2f}, "
-              f"{pos} up / {neg} down, sign p={p:.4f}, wilcoxon p={w:.4f}")
+        print(f"detector-steal: median {median(pairs):+.2f} up={pos} down={neg} "
+              f"sign p={p:.4f} wilcoxon p={w:.4f}")
     return {"detector": median(alld) if alld else None,
             "steal": median(alls) if alls else None}
 
 
 def freeze(data, out_path):
-    """write the gathered classes to a frozen JSON file"""
     from benchmark import lib
     lib.refuse_unpublishable_experiments()
     p = ROOT / out_path
     p.write_text(json.dumps({"classes": data}, indent=1, sort_keys=True) + "\n")
-    print(f"froze {sum(len(v) for v in data.values())} condition-rounds to {out_path}")
+    print(f"froze {sum(len(v) for v in data.values())} -> {out_path}")
 
 
 def thawed(frozen):
-    """load the classes from a frozen JSON file"""
     return json.loads((ROOT / frozen).read_text())["classes"]
 
 
 def verdict(frozen="results/earlier_phase/frozen/gapdet-frozen.json"):
-    """return the control-subtracted medians and the detector floor"""
     data = thawed(frozen)
     ctl = data.get("control", [])
     inj = {k: v for k, v in data.items() if k != "control"}
@@ -241,18 +226,17 @@ def verdict(frozen="results/earlier_phase/frozen/gapdet-frozen.json"):
 
 
 def selftest():
-    """check the recall and parsing helpers on fixed inputs"""
     cases = []
     rows = [{"outside_frac": 0.40, "offcore_frac": 0.30,
              "detector_frac": 0.36, "steal_frac": 0.20}]
     d, s = recalls(rows)
-    cases.append(("detector recall is its fraction over the truth's", abs(d[0] - 0.9) < 1e-9))
-    cases.append(("steal recall is its fraction over the truth's", abs(s[0] - 0.5) < 1e-9))
+    cases.append(("detector recall = 0.36/0.40 = 0.9", abs(d[0] - 0.9) < 1e-9))
+    cases.append(("steal recall = 0.20/0.40 = 0.5", abs(s[0] - 0.5) < 1e-9))
 
     zero = [{"outside_frac": 0.0, "offcore_frac": 0.0,
              "detector_frac": 0.1, "steal_frac": 0.1}]
     d0, s0 = recalls(zero)
-    cases.append(("a window with no loss yields no recall",
+    cases.append(("outside_frac=0 offcore_frac=0: no recall",
                   d0 == [] and s0 == []))
 
     txt = ("TEMPO-L2 GAP_DETECTOR cpu=4 wall_ns=18000000000 iters=9 threshold_ns=2000 cal_max_ns=5\n"
@@ -268,19 +252,19 @@ def selftest():
     got = one(tmp, 4)
     import shutil
     shutil.rmtree(tmp)
-    cases.append(("a run parses out of the guest console and the injector meta",
+    cases.append(("one(): offcore=0.30 detector=0.30 steal=0.20",
                   got is not None and abs(got["offcore_frac"] - 0.30) < 1e-9
                   and abs(got["detector_frac"] - 0.30) < 1e-9
                   and abs(got["steal_frac"] - 0.20) < 1e-9))
-    cases.append(("a run with no exit counter reports no `outside`",
+    cases.append(("no exits.txt: outside_frac=0.0",
                   got is not None and got["outside_frac"] == 0.0))
-    cases.append(("the two denominators are different quantities and both are kept",
+    cases.append(("offcore_frac, outside_frac both present",
                   got is not None and "offcore_frac" in got and "outside_frac" in got))
-    cases.append(("the detector's own window is used for its fraction",
+    cases.append(("detector_wall_ns=18s, window_ns=20s",
                   got is not None and got["detector_wall_ns"] == 18_000_000_000
                   and got["window_ns"] == 20_000_000_000))
 
-    cases.append(("a run without a detector yields nothing",
+    cases.append(("run dir absent: None",
                   one(ROOT / "results" / "does-not-exist", 4) is None))
 
     bad = sum(1 for _, good in cases if not good)
@@ -291,7 +275,6 @@ def selftest():
 
 
 def main():
-    """run the selftest, freeze, or report"""
     ap = argparse.ArgumentParser()
     ap.add_argument("--paired", default="results/earlier_phase/paired/paired-gapdet.json")
     ap.add_argument("--frozen", default="results/earlier_phase/frozen/gapdet-frozen.json")
@@ -311,7 +294,7 @@ def main():
     data = (thawed(a.frozen) if (not a.live and (ROOT / a.frozen).exists())
             else gather(a.paired, a.gapcpu))
     if not data:
-        print("no rounds carried a detector report", file=sys.stderr)
+        print("no detector reports", file=sys.stderr)
         return 1
     report(data)
     return 0

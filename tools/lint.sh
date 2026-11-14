@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# lint the tree
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 2
 py=() sh=()

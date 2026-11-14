@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
-"""Measure the host-level loop's summed thread run-delay over the injection window
-
-Usage: level0.py snap <stages.pid> [--proc DIR]
-       level0.py window <before> <after>
-       level0.py --selftest
-  snap     one run-delay sample
-  window   run delay between two samples"""
-
 import sys
 import time
 from pathlib import Path
 
 COMM = "pipeline"
+USAGE = """usage: level0.py snap <stages.pid> [--proc DIR]
+       level0.py window <before> <after>
+       level0.py --selftest"""
 
 
 def snap(pidfile, proc="/proc"):
-    """sum the run_delay of every thread of the recorded pipeline pids now"""
     proc = Path(proc)
     try:
         pids = [p for p in Path(pidfile).read_text().split() if p.isdigit()]
@@ -43,12 +37,10 @@ def snap(pidfile, proc="/proc"):
 
 
 def fmt(d):
-    """format a snapshot as a key=value line"""
     return " ".join(f"{k}={d[k]}" for k in ("t_ns", "rundelay_ns", "threads", "pids", "foreign"))
 
 
 def parse(text):
-    """parse key=value tokens into a dict"""
     out = {}
     for tok in text.split():
         k, sep, v = tok.partition("=")
@@ -58,23 +50,22 @@ def parse(text):
 
 
 def window(before, after):
-    """return the l0.meta lines for the window between two snapshots"""
     lines = []
     why = ""
     try:
         t0, t1 = int(before["t_ns"]), int(after["t_ns"])
         r0, r1 = int(before["rundelay_ns"]), int(after["rundelay_ns"])
     except (KeyError, ValueError):
-        return ["loop_rundelay_frac=-", "loop_rundelay_why=unreadable_snapshot"]
+        return ["loop_rundelay_frac=-", "loop_rundelay_why=unreadable"]
     pb, pa = before.get("pids", "-"), after.get("pids", "-")
     if pb == "-":
-        why = "no_stage_pid_is_the_pipeline"
+        why = "no_pipeline_pid"
     elif pb != pa:
-        why = "stage_pids_differ_between_snapshots"
+        why = "pids_differ"
     elif t1 <= t0:
-        why = "window_not_positive"
+        why = "bad_window"
     elif r1 < r0:
-        why = "run_delay_went_backwards"
+        why = "run_delay_backwards"
     lines += [f"loop_rundelay_window_ns={max(r1 - r0, 0)}", f"loop_wall_ns={max(t1 - t0, 0)}",
               f"loop_threads={after.get('threads', '-')}", f"loop_pids={pa}",
               f"loop_foreign_pids={after.get('foreign', '-')}"]
@@ -86,14 +77,12 @@ def window(before, after):
 
 
 def selftest():
-    """check snap and window on a constructed /proc"""
     import tempfile
     cases = []
     with tempfile.TemporaryDirectory() as d:
         proc = Path(d) / "proc"
 
         def task(pid, comm, delays):
-            """write a fake /proc entry with a schedstat per thread"""
             (proc / pid).mkdir(parents=True, exist_ok=True)
             (proc / pid / "comm").write_text(comm + "\n")
             for i, rd in enumerate(delays):
@@ -107,28 +96,28 @@ def selftest():
         pf = Path(d) / "stages.pid"
         pf.write_text("10 11 12\n")
         s = snap(pf, proc)
-        cases.append(("sums run_delay over every thread of the pipeline pids",
+        cases.append(("snap: rundelay_ns=155 threads=3 pids=10,11 foreign=1",
                       (s["rundelay_ns"], s["threads"], s["pids"], s["foreign"]) == (155, 3, "10,11", 1)))
-        cases.append(("a snapshot round-trips through its one line", parse(fmt(s))["rundelay_ns"] == "155"))
+        cases.append(("parse(fmt(snap)): rundelay_ns round-trip", parse(fmt(s))["rundelay_ns"] == "155"))
         a = dict(s, t_ns=s["t_ns"] + 1000, rundelay_ns=655)
         w = parse(" ".join(window(parse(fmt(s)), parse(fmt(a)))))
-        cases.append(("the window is the difference over the wall time",
+        cases.append(("window: rundelay_window_ns=500 frac=0.5",
                       (w.get("loop_rundelay_window_ns"), w.get("loop_rundelay_frac")) == ("500", "0.500000")))
         gone = dict(a, pids="10")
         w = parse(" ".join(window(parse(fmt(s)), parse(fmt(gone)))))
-        cases.append(("a stage that vanished mid-window reads '-'",
+        cases.append(("pids differ: frac=-",
                       w.get("loop_rundelay_frac") == "-" and "differ" in w.get("loop_rundelay_why", "")))
         back = dict(a, rundelay_ns=10)
-        cases.append(("a sum that goes backwards reads '-'",
+        cases.append(("rundelay_ns decreases: frac=-",
                       parse(" ".join(window(parse(fmt(s)), parse(fmt(back))))).get("loop_rundelay_frac") == "-"))
         pf.write_text("12\n")
         none = snap(pf, proc)
-        cases.append(("no pipeline pid at all reads '-'",
+        cases.append(("no pipeline pid: frac=-",
                       parse(" ".join(window(parse(fmt(none)), parse(fmt(dict(none, t_ns=none["t_ns"] + 5)))))
                             ).get("loop_rundelay_frac") == "-"))
-        cases.append(("a missing pid file is an empty snapshot",
+        cases.append(("pid file absent: pids=-",
                       snap(Path(d) / "absent", proc)["pids"] == "-"))
-        cases.append(("an unreadable snapshot reads '-'", window({}, {})[0] == "loop_rundelay_frac=-"))
+        cases.append(("window({}, {}): frac=-", window({}, {})[0] == "loop_rundelay_frac=-"))
     bad = [c for c, ok in cases if not ok]
     for c, ok in cases:
         print(("ok   " if ok else "FAIL ") + c)
@@ -137,14 +126,13 @@ def selftest():
 
 
 def main(argv):
-    """run the snap, window or selftest subcommand"""
     if argv == ["--selftest"]:
         return selftest()
     if len(argv) in (2, 4) and argv[0] == "snap":
         proc = "/proc"
         if len(argv) == 4:
             if argv[2] != "--proc":
-                print(__doc__, file=sys.stderr)
+                print(USAGE, file=sys.stderr)
                 return 2
             proc = argv[3]
         print(fmt(snap(argv[1], proc)))
@@ -156,7 +144,7 @@ def main(argv):
             b, a = {}, {}
         print("\n".join(window(b, a)))
         return 0
-    print(__doc__, file=sys.stderr)
+    print(USAGE, file=sys.stderr)
     return 2
 
 

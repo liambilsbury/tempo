@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# fetch, verify, configure and build the pinned L2 guest kernel, rt or nonrt
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
@@ -28,7 +27,6 @@ case "$VARIANT" in rt|nonrt) ;; *) echo "build_kernel: --variant is rt or nonrt,
 if [ "$VARIANT" = rt ]; then SRC_TREE="$SRC_DIR/linux-${KVER}"; OUT_DIR="$ROOT/build/kernel-rt"
 else                          SRC_TREE="$SRC_DIR/linux-${KVER}-nonrt"; OUT_DIR="$ROOT/build/kernel-nonrt"; fi
 
-# print the scripts/config arguments that set the preemption model
 preempt_deltas() {
     echo "--enable EXPERT"
     echo "--disable PREEMPT_NONE"
@@ -43,7 +41,6 @@ preempt_deltas() {
     fi
 }
 
-# print every scripts/config argument pair this build applies
 deltas() {
     preempt_deltas
 
@@ -87,7 +84,6 @@ required=("${preempt_required[@]}" EXPERT VIRTIO VIRTIO_PCI VIRTIO_BLK VIRTIO_CO
 
 [ "$DRY" = 1 ] && { echo "variant: $VARIANT"; deltas; echo "required: ${required[*]}"; echo "forbidden: ${forbidden[*]}"; exit 0; }
 
-# check for a running tempo measurement by process name
 measuring() {
     ps -eo comm= | grep -qE '^(qemu-system|pipeline$)' && return 0
     ps -eo comm=,args= | awk '$1 ~ /^python3/ && /benchmark\/(paired|experiment)/ {found=1}

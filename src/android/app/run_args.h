@@ -1,9 +1,7 @@
-// the Android app's stage argument file reader
 #ifndef TEMPO_RUN_ARGS_H
 #define TEMPO_RUN_ARGS_H
 #include <string.h>
 
-// split text into its non-empty lines in place
 static int run_args_split(char *text, char **lines, int max_lines)
 {
     int n = 0;
@@ -24,7 +22,6 @@ static int run_args_split(char *text, char **lines, int max_lines)
     return n;
 }
 
-// split a line on spaces in place into argv
 static int run_args_argv(char *line, char **argv, int max_args, const char **stage)
 {
     int argc = 1;
@@ -53,7 +50,6 @@ static int run_args_argv(char *line, char **argv, int max_args, const char **sta
     return argc;
 }
 
-// read interval_ms, window_ms and spin_ms from the headroom argument file
 static int run_headroom_args(const char *text, int *interval_ms, int *window_ms, int *spin_ms)
 {
     int interval = -1, window = -1, spin = -1;

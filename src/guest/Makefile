@@ -1,4 +1,3 @@
-# build the tempo_steal kernel module
 obj-m += tempo_steal.o
 
 KDIR ?= /lib/modules/$(shell uname -r)/build

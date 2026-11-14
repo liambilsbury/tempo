@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Run a configuration of the pipeline and append its row to the fact table"""
-
 import argparse
 import os
 import struct
@@ -17,19 +15,16 @@ STAGES = ("telemetry", "actuator", "compute", "sensor")
 
 
 def read_records(path):
-    """read the per-frame records of a telemetry file"""
     raw = Path(path).read_bytes()
     if len(raw) % HDR.size:
-        raise SystemExit(f"{path}: {len(raw)} bytes is not a whole number of "
-                         f"{HDR.size}-byte records")
+        raise SystemExit(f"{path}: partial record")
     return [HDR.unpack_from(raw, i) for i in range(0, len(raw), HDR.size)]
 
 
 def main():
-    """run the stages and append the row"""
     ap = argparse.ArgumentParser()
     ap.add_argument("--config-id", required=True)
-    ap.add_argument("--factor", default="none", help="which axis this row varies")
+    ap.add_argument("--factor", default="none", help="axis")
     ap.add_argument("--factor-value", default="none")
     ap.add_argument("--frames", type=int, default=60000)
     ap.add_argument("--period-ns", type=int, default=1000000)
@@ -38,19 +33,19 @@ def main():
     ap.add_argument("--sched", default="other", choices=("other", "fifo", "deadline"))
     ap.add_argument("--prio", type=int, default=80)
     ap.add_argument("--cpus", default="",
-                    help="one per stage: sensor,compute,actuator,telemetry")
+                    help="sensor,compute,actuator,telemetry")
     ap.add_argument("--neighbour", default="none",
-                    help="the contending load, recorded only")
-    ap.add_argument("--deadline-ns", type=int, default=0, help="0 means the loop period")
+                    help="recorded only")
+    ap.add_argument("--deadline-ns", type=int, default=0, help="0 = period")
     ap.add_argument("--table", default="results.tsv")
     ap.add_argument("--keep-telemetry", default="",
-                    help="copy the raw per-frame records here")
+                    help="raw records copy")
     ap.add_argument("--allow-unmeasurable-host", action="store_true",
-                    help="write the row anyway, as RED")
+                    help="write as RED")
     args = ap.parse_args()
 
     if not lib.BIN.exists():
-        raise SystemExit(f"{lib.BIN} not built -- run make")
+        raise SystemExit(f"{lib.BIN} not built")
 
     facts = lib.machine_config()
     meas = lib.host_measurable()
@@ -60,7 +55,7 @@ def main():
     deadline = args.deadline_ns or args.period_ns
 
     if not meas["measurable"] and not args.allow_unmeasurable_host:
-        print(f"run: this host cannot produce a real-time number ({meas['why']})", file=sys.stderr)
+        print(f"run: unmeasurable ({meas['why']})", file=sys.stderr)
         return 3
 
     cpus = [c.strip() for c in args.cpus.split(",") if c.strip()] if args.cpus else []

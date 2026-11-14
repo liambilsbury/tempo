@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# build build/android/tempo-loop.apk from build/android/pipeline
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 NDK="${NDK:-}" SDK="${SDK:-}"
@@ -15,7 +14,6 @@ PIPELINE=build/android/pipeline
 KS=build/android/debug.keystore
 APK=build/android/tempo-loop.apk
 
-# refuse a missing tool or input by name
 need() { [ -e "$2" ] || { echo "android_app: no $1 at $2" >&2; exit 2; }; }
 need "NDK clang" "$CLANG"
 need "native_app_glue" "$GLUE/android_native_app_glue.c"

@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# boot the L1 VM
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 . benchmark/host/settings.conf

@@ -1,4 +1,3 @@
-// the Android build's own flags
 #ifndef TEMPO_ANDROID_ARGS_H
 #define TEMPO_ANDROID_ARGS_H
 #include <errno.h>
@@ -15,7 +14,6 @@ struct android_args {
     const char *record;
 };
 
-// read a positive count into *out
 static int android_count(const char *flag, const char *v, long *out, char *err, size_t errlen)
 {
     char *end;
@@ -29,7 +27,6 @@ static int android_count(const char *flag, const char *v, long *out, char *err, 
     return 0;
 }
 
-// read the Android flags, removing the ones the pipeline does not take
 static int android_args(int *argc, char **argv, struct android_args *a, char *err, size_t errlen)
 {
     int out = 1;
@@ -43,7 +40,7 @@ static int android_args(int *argc, char **argv, struct android_args *a, char *er
         const char *v = i + 1 < *argc ? argv[i + 1] : NULL;
         if (!strcmp(argv[i], "--record")) {
             if (!v || !*v) {
-                snprintf(err, errlen, "--record needs a path");
+                snprintf(err, errlen, "--record: no path");
                 return 2;
             }
             a->record = v;
@@ -56,7 +53,7 @@ static int android_args(int *argc, char **argv, struct android_args *a, char *er
             else if (v && !strcmp(v, "off"))
                 a->adpf = 0;
             else {
-                snprintf(err, errlen, "bad --adpf value: %s", v ? v : "(none)");
+                snprintf(err, errlen, "bad --adpf: %s", v ? v : "(none)");
                 return 2;
             }
             i++;
@@ -68,7 +65,7 @@ static int android_args(int *argc, char **argv, struct android_args *a, char *er
             else if (v && !strcmp(v, "off"))
                 a->adpf_telemetry = 0;
             else {
-                snprintf(err, errlen, "bad --adpf-telemetry value: %s", v ? v : "(none)");
+                snprintf(err, errlen, "bad --adpf-telemetry: %s", v ? v : "(none)");
                 return 2;
             }
             i++;
@@ -88,7 +85,7 @@ static int android_args(int *argc, char **argv, struct android_args *a, char *er
     argv[out] = NULL;
     *argc = out;
     if (a->record && !a->frames) {
-        snprintf(err, errlen, "--record needs --frames to size the record");
+        snprintf(err, errlen, "--record needs --frames");
         return 2;
     }
     return 0;

@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# idle the host for a batch run, then restore what it changed
-#   sudo bash benchmark/host/idle_machine.sh start <idle dir> <run pidfile> [--pins L] [--vm-cores L] [--summary F] [--log F]
-#   sudo bash benchmark/host/idle_machine.sh restore [<idle dir>/system.state]
-#   bash benchmark/host/idle_machine.sh plan [--pins L] [--vm-cores L]
 set -uo pipefail
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 SYS="${IDLE_SYS:-/sys}"; PROC="${IDLE_PROC:-/proc}"
@@ -11,16 +7,17 @@ POLL="${IDLE_POLL_S:-5}"; PID_WAIT="${IDLE_PID_WAIT_S:-900}"; APPLY_WAIT="${IDLE
 CPU="$SYS/devices/system/cpu"
 ROOT="$(cd "$(dirname "$SELF")/../.." && pwd)"
 RESD="${IDLE_RESULTS:-$ROOT/results/experiments}"
-# print the old name benchmark/renamed.tsv gives for a new name
 renamed_old() { awk -F'\t' -v n="$1" '$2 == n { print $1 }' "$ROOT/benchmark/renamed.tsv" 2>/dev/null; }
 OLD_RUN="$(renamed_old 'run_batches-<stamp>')"; OLD_RUN="${OLD_RUN%<stamp>}"
 # shellcheck disable=SC2207
 ONE_ROUND_PFXS=(one-round- $(renamed_old 'one-round-*' | sed 's/[*]$//'))
 
-# print the usage lines from this file's header and exit 2
-usage() { grep '^#   .*benchmark/host/idle_machine.sh' "$SELF" | sed 's/^# *//' >&2; exit 2; }
+USAGE="sudo bash benchmark/host/idle_machine.sh start <idle dir> <run pidfile> [--pins L] [--vm-cores L] [--summary F] [--log F]
+sudo bash benchmark/host/idle_machine.sh restore [<idle dir>/system.state]
+bash benchmark/host/idle_machine.sh plan [--pins L] [--vm-cores L]"
+usage() { echo "$USAGE" >&2; exit 2; }
 CMD="${1:-}"; [ $# -gt 0 ] && shift
-# read a CPU list for a key from benchmark/host/settings.conf
+case "$CMD" in -h|--help) echo "$USAGE"; exit 0;; esac
 host_conf() { sed -n "s/^$1=\([0-9,-]*\)\$/\1/p" "$ROOT/benchmark/host/settings.conf" 2>/dev/null | tail -1; }
 POS=(); PINS="$(host_conf HOST_PINS)"; VMC="$(host_conf VM_HOST_CORES)"; SUMMARY=""; LOGF=""
 while [ $# -gt 0 ]; do
@@ -29,13 +26,13 @@ while [ $# -gt 0 ]; do
         --vm-cores) [ $# -ge 2 ] || usage; VMC="$2"; shift 2;;
         --summary) [ $# -ge 2 ] || usage; SUMMARY="$2"; shift 2;;
         --log) [ $# -ge 2 ] || usage; LOGF="$2"; shift 2;;
+        -h|--help) echo "$USAGE"; exit 0;;
         -*) usage;;
         *) POS+=("$1"); shift;;
     esac
 done
 [[ "$PINS" =~ ^[0-9,-]+$ && "$VMC" =~ ^[0-9,-]+$ ]] || usage
 
-# expand a CPU list like 0-3,16 into single numbers
 expand() {
     local p out=() i; local -a parts; IFS=, read -ra parts <<<"$1"
     for p in "${parts[@]}"; do
@@ -45,31 +42,19 @@ expand() {
     done
     echo "${out[*]}"
 }
-# test whether a space-separated list holds an item
 has() { [[ " $1 " == *" $2 "* ]]; }
-# join the arguments with commas
 csv() { local IFS=,; echo "$*"; }
-# print the arguments as {a,b}, or an argument bare
 braces() { if [ $# -gt 1 ]; then echo "{$(csv "$@")}"; else echo "$1"; fi; }
-# compress CPU numbers into ranges like 0-3,16
 ranges() { printf '%s\n' "$@" | sort -n | awk 'NR == 1 { a = b = $1; next } $1 == b + 1 { b = $1; next }
     { printf "%s%s,", a, (a == b ? "" : "-" b); a = b = $1 } END { if (NR) printf "%s%s", a, (a == b ? "" : "-" b) }'; }
-# count the input lines as "a x3, b x1"
 tally() { sort | uniq -c | awk '{printf "%s%s x%d", (NR > 1 ? ", " : ""), $2, $1}'; }
-# run systemctl with a timeout
 sc() { timeout -k 5 180 "${SC[@]}" "$@"; }
-# test whether a unit is active
 active() { [ "$(sc is-active "$1" 2>/dev/null)" = active ]; }
-# write a value to a path quietly
 put() { { printf '%s\n' "$2" > "$1"; } 2>/dev/null; }
-# print the current time
 now() { date '+%F %T %z'; }
-# test whether any of sysfs, procfs or systemctl is the real one
 real_host() { [ "$SYS" = /sys ] || [ "$PROC" = /proc ] || [ "${SC[*]}" = systemctl ]; }
-# give files back to the sudo user
 own() { [ -n "${SUDO_UID:-}" ] && chown "$SUDO_UID:${SUDO_GID:-$SUDO_UID}" "$@" 2>/dev/null; return 0; }
 
-# read what apply would change
 survey() {
     local c s p
     mapfile -t TIMERS < <(sc list-timers --no-legend --plain 2>/dev/null \
@@ -106,36 +91,33 @@ survey() {
 
 plan() {
     survey
-    echo "the root helper would, in order:"
+    echo "plan:"
     if [ "${#TIMERS[@]}" -gt 0 ]; then echo "+ systemctl stop ${TIMERS[*]}"
-    else echo "  no active system timers"; fi
-    if [ -n "$IRQB" ]; then echo "+ systemctl stop irqbalance.service"; else echo "  irqbalance.service is not active"; fi
-    if [ -n "$SNAPD" ]; then echo "+ systemctl stop snapperd.service"; else echo "  (snapperd.service is not active)"; fi
+    else echo "  no timers"; fi
+    if [ -n "$IRQB" ]; then echo "+ systemctl stop irqbalance.service"; else echo "  irqbalance inactive"; fi
+    [ -n "$SNAPD" ] && echo "+ systemctl stop snapperd.service"
     [ "${#GOVC[@]}" -gt 0 ] && echo "+ echo performance > $CPU/cpuN/cpufreq/scaling_governor for N in $(ranges "${GOVC[@]}")"
     [ "${#EPPC[@]}" -gt 0 ] && echo "+ echo performance > $CPU/cpuN/cpufreq/energy_performance_preference for N in $(ranges "${EPPC[@]}")"
     if [ "${#SIBS[@]}" -gt 0 ]; then echo "+ echo 0 > $CPU/cpu$(braces "${SIBS[@]}")/online"
-    else echo "  no SMT sibling of pins $PINS to offline"; fi
+    else echo "  no SMT siblings"; fi
     [ "${#SKIPPED[@]}" -gt 0 ] && echo "  kept online: ${SKIPPED[*]}"
     if [ -n "$HK" ] && [ "${#IRQS[@]}" -gt 0 ]; then
         echo "+ echo $HK > $PROC/irq/N/smp_affinity_list for N in $(ranges "${IRQS[@]}")"
     fi
-    if [ -n "$DM" ]; then echo "+ systemctl stop $DM   -- ENDS THE GRAPHICAL SESSION"
-    else echo "  no active display manager"; fi
-    echo "restore, when the run exits or the helper is signalled:"
+    if [ -n "$DM" ]; then echo "+ systemctl stop $DM"
+    else echo "  no display manager"; fi
+    echo "restore:"
     [ "${#SIBS[@]}" -gt 0 ] && echo "+ echo 1 > $CPU/cpu$(braces "${SIBS[@]}")/online"
-    [ "${#IRQS[@]}" -gt 0 ] && echo "+ each $PROC/irq/N/smp_affinity_list back to its recorded value"
-    [ "${#GOVC[@]}" -gt 0 ] && echo "+ each CPU's scaling_governor, then its energy_performance_preference, back to its recorded value"
+    [ "${#IRQS[@]}" -gt 0 ] && echo "+ restore $PROC/irq/N/smp_affinity_list"
+    [ "${#GOVC[@]}" -gt 0 ] && echo "+ restore scaling_governor, energy_performance_preference"
     # shellcheck disable=SC2206
     local up=($IRQB $SNAPD "${TIMERS[@]}"); [ "${#up[@]}" -gt 0 ] && echo "+ systemctl start ${up[*]}"
-    echo "+ systemctl --user -M <you>@ start <the user units the launcher stopped>"
+    echo "+ systemctl --user -M <you>@ start <stopped user units>"
     [ -n "$DM" ] && echo "+ systemctl start $DM"
-    echo "  by hand: sudo bash benchmark/host/idle_machine.sh restore <summary dir>/idle/system.state, or reboot"
 }
 
 QD=""; STATE=""
-# append a tab-separated row to the state file
 rec() { local IFS=$'\t'; echo "$*" >> "$STATE"; }
-# record and apply the idle state
 apply() {
     survey
     local i c t v ok=() failed=() moved=0 unmov=0 same=0
@@ -176,17 +158,17 @@ apply() {
         sc stop "$DM" >/dev/null 2>&1; active "$DM" && { rec failed dm "$DM"; dmok=0; }
     fi
     {
-        echo "host idling applied $(now) by root helper pid $$:"
-        echo "  system timers stopped (${#ok[@]}): ${ok[*]:-none}"
-        echo "  irqbalance: $([ -n "$IRQB" ] && echo stopped || echo "not active")"
-        echo "  snapperd: $([ -n "$SNAPD" ] && echo stopped || echo "not active")"
-        echo "  scaling_governor -> performance on ${#GOVC[@]} CPU(s), was: $(printf '%s\n' "${GOVV[@]}" | tally)"
-        echo "  energy_performance_preference -> performance on ${#EPPC[@]} CPU(s), was: $(printf '%s\n' "${EPPV[@]}" | tally)"
-        echo "  SMT siblings of pins $PINS offline: ${off[*]:-none}$([ "${#SKIPPED[@]}" -gt 0 ] && echo "; kept online: ${SKIPPED[*]}")"
-        echo "  device IRQs -> housekeeping CPUs $HK: $moved moved, $unmov unmovable, $same already there"
-        if [ -z "$DM" ]; then echo "  display manager: none active"
+        echo "applied $(now) pid $$:"
+        echo "  timers stopped (${#ok[@]}): ${ok[*]:-none}"
+        echo "  irqbalance: $([ -n "$IRQB" ] && echo stopped || echo inactive)"
+        echo "  snapperd: $([ -n "$SNAPD" ] && echo stopped || echo inactive)"
+        echo "  scaling_governor=performance on ${#GOVC[@]}, was: $(printf '%s\n' "${GOVV[@]}" | tally)"
+        echo "  energy_performance_preference=performance on ${#EPPC[@]}, was: $(printf '%s\n' "${EPPV[@]}" | tally)"
+        echo "  SMT offline: ${off[*]:-none}$([ "${#SKIPPED[@]}" -gt 0 ] && echo "; kept: ${SKIPPED[*]}")"
+        echo "  smp_affinity_list=$HK: moved=$moved unmovable=$unmov unchanged=$same"
+        if [ -z "$DM" ]; then echo "  display manager: none"
         elif [ "$dmok" = 1 ]; then echo "  display manager $DM stopped"
-        else echo "  display manager $DM did NOT stop; restoring everything, launch refused"; fi
+        else echo "  display manager $DM not stopped"; fi
         [ "${#failed[@]}" -gt 0 ] && echo "  failed: $(csv "${failed[@]}" | sed 's/,/, /g')"
         echo "  state: $STATE"
     } > "$QD/apply.txt"
@@ -194,13 +176,12 @@ apply() {
     [ "$dmok" = 1 ]
 }
 
-# restore the values in a state file
 restore() {
     local st="$1" kind a b bad=() n=0 c
     local -A F=()
     if [ ! -r "$st" ]; then
         local msg
-        msg="host restore ($(now), root helper pid $$${WHY:+, $WHY}): FAILED -- cannot read $st, nothing put back; reboot to restore"
+        msg="host restore ($(now), root helper pid $$${WHY:+, $WHY}): FAILED -- unreadable $st"
         echo "$msg"
         if [ -n "$QD" ]; then echo "$msg" >> "$QD/restore.txt"; own "$QD/restore.txt"; fi
         return 1
@@ -244,9 +225,9 @@ restore() {
     done < <(rows dm)
     local out
     if [ "${#bad[@]}" = 0 ]; then
-        out="host restore ($(now), root helper pid $$${WHY:+, $WHY}): OK -- all $n recorded change(s) put back from $st"
+        out="host restore ($(now), root helper pid $$${WHY:+, $WHY}): OK -- $n restored from $st"
     else
-        out="host restore ($(now), root helper pid $$${WHY:+, $WHY}): FAILED -- $n put back, NOT put back: $(csv "${bad[@]}" | sed 's/,/, /g'); run sudo bash benchmark/host/idle_machine.sh restore $st, or reboot"
+        out="host restore ($(now), root helper pid $$${WHY:+, $WHY}): FAILED -- $n restored, NOT: $(csv "${bad[@]}" | sed 's/,/, /g')"
     fi
     echo "$out"
     if [ -n "$QD" ]; then echo "$out" >> "$QD/restore.txt"; own "$QD/restore.txt"; fi
@@ -254,7 +235,6 @@ restore() {
 }
 
 WHY=""; RESTORED=0
-# restore once and exit
 finish() {
     trap '' TERM INT HUP
     [ "$RESTORED" = 1 ] && exit 0
@@ -263,30 +243,25 @@ finish() {
     for f in "$SUMMARY" "$LOGF"; do [ -n "$f" ] && { { echo; echo "$out"; } >> "$f"; own "$f"; }; done
     exit "$rc"
 }
-# test whether a pid is still the recorded run_all.sh process
 run_alive() {
     [ -d "/proc/$1" ] && [[ "$(tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null)" == *benchmark/batches/run_all.sh*--foreground* ]]
 }
-# sleep a poll interval so a trap can run
 nap() { sleep "$POLL" & wait $!; }
-# restore once the run exits
 watch_run() {
     local pf="$1" t0=$SECONDS pid=""
     while [ -z "$pid" ]; do
-        [ -e "$QD/abort" ] && finish "the launcher gave up before the run started"
+        [ -e "$QD/abort" ] && finish "abort before run"
         [ -s "$pf" ] && pid="$(tr -dc '0-9' < "$pf")"
-        [ -z "$pid" ] && [ $((SECONDS - t0)) -ge "$PID_WAIT" ] && finish "no run pid in $pf after ${PID_WAIT}s"
+        [ -z "$pid" ] && [ $((SECONDS - t0)) -ge "$PID_WAIT" ] && finish "no run pid"
         [ -z "$pid" ] && nap
     done
-    echo "idle: waiting for the run, pid $pid ($(now))"
     while run_alive "$pid"; do
-        [ -e "$QD/abort" ] && finish "abort requested"
+        [ -e "$QD/abort" ] && finish "abort"
         nap
     done
-    finish "the run (pid $pid) exited"
+    finish "run $pid exited"
 }
 
-# print the newest unrestored system.state
 latest_unrestored() {
     local st qd base stamp p newest="" newest_stamp=""
     while IFS= read -r st; do
@@ -312,13 +287,13 @@ case "$CMD" in
     restore)
         [ "${#POS[@]}" -le 1 ] || usage
         if [ "${#POS[@]}" = 0 ]; then
-            real_host && [ "$(id -u)" != 0 ] && { echo "idle: restore needs root: sudo bash benchmark/host/idle_machine.sh restore" >&2; exit 2; }
+            real_host && [ "$(id -u)" != 0 ] && { echo "idle: restore needs root" >&2; exit 2; }
             AUTO="$(latest_unrestored)"
             [ -n "$AUTO" ] || { echo "idle: nothing to restore"; exit 0; }
-            echo "idle: restoring the most recently changed unrestored state: $AUTO"
+            echo "idle: state $AUTO"
             POS=("$AUTO")
         else
-            real_host && [ "$(id -u)" != 0 ] && { echo "idle: restore needs root: sudo bash benchmark/host/idle_machine.sh restore ${POS[0]}" >&2; exit 2; }
+            real_host && [ "$(id -u)" != 0 ] && { echo "idle: restore needs root" >&2; exit 2; }
         fi
         QD="$(dirname "${POS[0]}")"; STATE="${POS[0]}"; WHY="by hand"
         [ -w "$QD" ] || QD=""
@@ -326,7 +301,7 @@ case "$CMD" in
     start)
         [ "${#POS[@]}" = 2 ] || usage
         real_host && [ "$(id -u)" != 0 ] && { echo "idle: start needs root" >&2; exit 2; }
-        QD="${POS[0]}"; [ -d "$QD" ] || { echo "idle: no directory $QD" >&2; exit 2; }
+        QD="${POS[0]}"; [ -d "$QD" ] || { echo "idle: no $QD" >&2; exit 2; }
         rm -f "$QD/apply.status" "$QD/abort" "$QD/helper.pid"
         A=(watch "$QD" "${POS[1]}" --pins "$PINS" --vm-cores "$VMC"); [ -n "$SUMMARY" ] && A+=(--summary "$SUMMARY"); [ -n "$LOGF" ] && A+=(--log "$LOGF")
         setsid env --default-signal=HUP,INT,TERM bash "$SELF" "${A[@]}" < /dev/null >> "$QD/helper.log" 2>&1 &
@@ -335,25 +310,24 @@ case "$CMD" in
         st="$(cat "$QD/apply.status" 2>/dev/null)"
         [ -s "$QD/apply.txt" ] && cat "$QD/apply.txt"
         case "$st" in
-            applied) echo "idle: the helper, pid $(cat "$QD/helper.pid"), waits for the run in $(dirname "${POS[1]}"), then restores" ;;
-            failed) echo "idle: the display manager did not stop; the helper restores everything and exits:" >&2
+            applied) echo "idle: helper pid=$(cat "$QD/helper.pid")" ;;
+            failed) echo "idle: display manager not stopped" >&2
                     for i in $(seq 300); do [ -s "$QD/restore.txt" ] && break; sleep 0.1; done
                     cat "$QD/restore.txt" >&2 2>/dev/null; exit 1 ;;
-            *) echo "idle: the helper did not report within ${APPLY_WAIT}s; asking it to restore, see $QD/helper.log" >&2
+            *) echo "idle: helper silent ${APPLY_WAIT}s" >&2
                : > "$QD/abort"; exit 1 ;;
         esac ;;
     watch)
         [ "${#POS[@]}" = 2 ] || usage
         QD="${POS[0]}"; STATE="$QD/system.state"
         echo $$ > "$QD/helper.pid"; own "$QD/helper.pid"
-        trap 'finish "SIGTERM to the helper"' TERM
-        trap 'finish "SIGINT to the helper"' INT
-        trap 'finish "SIGHUP to the helper"' HUP
-        echo "idle: helper pid $$ applying ($(now))"
+        trap 'finish SIGTERM' TERM
+        trap 'finish SIGINT' INT
+        trap 'finish SIGHUP' HUP
         if apply; then echo applied > "$QD/apply.status"; own "$QD/apply.status"; cat "$QD/apply.txt"
         else
             cat "$QD/apply.txt"; echo failed > "$QD/apply.status"; own "$QD/apply.status"
-            finish "the display manager did not stop"
+            finish "display manager not stopped"
         fi
         watch_run "${POS[1]}" ;;
     *) usage ;;

@@ -1,4 +1,3 @@
-// inject interference at the L1 cores an L2 guest's vCPUs are pinned to
 #define _GNU_SOURCE
 #include <errno.h>
 #include <limits.h>
@@ -26,7 +25,6 @@ static int rt_prio = 0;
 static uint64_t epoch;
 static char watch_comm[64] = "qemu";
 
-// CPU figures of the watched process and its vCPU threads
 struct wstat {
     long     pid;
     uint64_t cpu_ns;
@@ -40,7 +38,6 @@ struct wstat {
     uint64_t per_rundelay_ns[TEMPO_MAX_VCPU];
 };
 
-// sum each thread's runtime and run delay from schedstat
 static void task_sched_ns(const char *pid, struct wstat *w)
 {
     char dirp[320];
@@ -88,7 +85,6 @@ static void task_sched_ns(const char *pid, struct wstat *w)
     closedir(td);
 }
 
-// read the Nth field after the comm in /proc/<pid>/stat
 static int stat_field(const char *after_paren, int want, unsigned long long *out)
 {
     const char *p = after_paren;
@@ -108,7 +104,6 @@ static int stat_field(const char *after_paren, int want, unsigned long long *out
     return 0;
 }
 
-// read the CPU figures of the busiest process whose comm matches --watch
 static struct wstat watched_stat(void)
 {
     struct wstat best = {0};
@@ -164,7 +159,6 @@ static int wstat_gone;
 
 static uint64_t now_ns(void);
 
-// sample the watched process until the deadline
 static void wait_and_watch(uint64_t until, struct wstat before)
 {
     wstat_last = before;
@@ -181,7 +175,6 @@ static void wait_and_watch(uint64_t until, struct wstat before)
     }
 }
 
-// print every window figure for the watched process
 static void report_window(struct wstat before, uint64_t win_start_ns)
 {
     struct wstat after = wstat_last;
@@ -223,7 +216,6 @@ static void report_window(struct wstat before, uint64_t win_start_ns)
 }
 static void *shared_map;
 
-// return CLOCK_MONOTONIC in ns
 static uint64_t now_ns(void)
 {
     struct timespec ts;
@@ -231,15 +223,13 @@ static uint64_t now_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-// run this thread at SCHED_FIFO --rt-prio
 static void make_rt(void)
 {
     if (!rt_prio)
         return;
     struct sched_param sp = {.sched_priority = rt_prio};
     if (sched_setscheduler(0, SCHED_FIFO, &sp) != 0) {
-        fprintf(stderr, "inject: SCHED_FIFO prio %d: %s (run under sudo, or the injection "
-                        "will not preempt anything)\n", rt_prio, strerror(errno));
+        fprintf(stderr, "inject: SCHED_FIFO prio %d: %s\n", rt_prio, strerror(errno));
         exit(2);
     }
 }
@@ -250,12 +240,11 @@ static void pin(int cpu)
     CPU_ZERO(&set);
     CPU_SET(cpu, &set);
     if (sched_setaffinity(0, sizeof(set), &set) != 0) {
-        fprintf(stderr, "inject: pin to cpu %d: %s\n", cpu, strerror(errno));
+        fprintf(stderr, "inject: pin cpu %d: %s\n", cpu, strerror(errno));
         exit(2);
     }
 }
 
-// sleep until an absolute CLOCK_MONOTONIC deadline
 static void wait_until(uint64_t deadline_ns)
 {
     struct timespec ts = {.tv_sec = (time_t)(deadline_ns / 1000000000ull),
@@ -264,7 +253,6 @@ static void wait_until(uint64_t deadline_ns)
         ;
 }
 
-// per-thread injector arguments
 struct arg {
     int cpu;
     int partner;
@@ -275,7 +263,6 @@ static pthread_mutex_t wake_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t wake_cond = PTHREAD_COND_INITIALIZER;
 static atomic_long wake_seq;
 
-// wait on the condition variable, pinned to a target core
 static void *wake_target(void *v)
 {
     struct arg *a = v;
@@ -291,7 +278,6 @@ static void *wake_target(void *v)
     return NULL;
 }
 
-// wake the target threads at --rate-hz from the partner core
 static void *wake_source(void *v)
 {
     struct arg *a = v;
@@ -309,7 +295,6 @@ static void *wake_source(void *v)
     return NULL;
 }
 
-// read every page of the shared mapping in a tight loop on a target core
 static void *tlb_toucher(void *v)
 {
     struct arg *a = v;
@@ -322,7 +307,6 @@ static void *tlb_toucher(void *v)
     return NULL;
 }
 
-// mprotect the shared mapping at --rate-hz
 static void *tlb_source(void *v)
 {
     struct arg *a = v;
@@ -338,7 +322,6 @@ static void *tlb_source(void *v)
     return NULL;
 }
 
-// read every page of the shared mapping once per period, then sleep
 static void *tlbq_toucher(void *v)
 {
     struct arg *a = v;
@@ -355,7 +338,6 @@ static void *tlbq_toucher(void *v)
     return NULL;
 }
 
-// stream reads through a 256 MiB buffer on a core the guest does not use
 static void *cache_thrash(void *v)
 {
     struct arg *a = v;
@@ -376,13 +358,11 @@ static void *cache_thrash(void *v)
     return NULL;
 }
 
-// return the on-time of a slot at --duty
 static uint64_t hog_on_ns(uint64_t slot)
 {
     return (uint64_t)((double)slot * duty / 100.0);
 }
 
-// spin for the on-time of each slot, aligned to the shared epoch
 static void *cpu_load(void *v)
 {
     struct arg *a = v;
@@ -402,7 +382,6 @@ static void *cpu_load(void *v)
     return NULL;
 }
 
-// parse flags, start the threads for the mode and print the window figures
 int main(int argc, char **argv)
 {
     const char *mode = NULL;
@@ -452,7 +431,7 @@ int main(int argc, char **argv)
         if (!used) partner = c;
     }
     if (partner < 0) {
-        fprintf(stderr, "inject: every core is a target; no core left to inject from\n");
+        fprintf(stderr, "inject: no free core\n");
         return 2;
     }
 
@@ -504,7 +483,7 @@ int main(int argc, char **argv)
             placed++;
         }
         if (!placed) {
-            fprintf(stderr, "inject: no core outside the target set to put cache pressure on\n");
+            fprintf(stderr, "inject: no free core for cache\n");
             return 2;
         }
         printf("INJECT cache_threads=%d\n", placed);
@@ -547,8 +526,6 @@ int main(int argc, char **argv)
 usage:
     fprintf(stderr,
             "usage: inject --mode wake|tlb|tlbq|cache|cpu-load --cpus N[,N...] [--duration-s N]\n"
-            "              [--rate-hz N] [--duty PCT] [--rt-prio N] [--slot-us N]\n"
-            "  --rt-prio N   cpu-load threads at SCHED_FIFO priority N\n"
-            "  --slot-us N   cpu-load on/off period in us, default 1000\n");
+            "              [--rate-hz N] [--duty PCT] [--rt-prio N] [--slot-us N]\n");
     return 2;
 }

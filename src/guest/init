@@ -1,5 +1,4 @@
 #!/bin/busybox sh
-# run the control pipeline in the L2 guest and write its records to /dev/vda
 # shellcheck disable=SC2046
 
 /bin/busybox --install -s /bin
@@ -10,7 +9,6 @@ mkdir -p /tmp/shm /dev/shm
 mount -t tmpfs none /tmp 2>/dev/null
 mkdir -p /tmp/shm
 
-# print a tempo.<key>= value from the kernel command line
 kv() {
     sed -n "s/.*tempo\\.$1=\\([^ ]*\\).*/\\1/p" /proc/cmdline
 }
@@ -43,7 +41,6 @@ echo "TEMPO-L2 cmdline=$(cat /proc/cmdline)"
 echo "TEMPO-L2 clocksource=$(cat /sys/devices/system/clocksource/clocksource0/current_clocksource 2>/dev/null)"
 echo "TEMPO-L2 nproc=$(nproc)"
 
-# print the guest's steal time from /proc/stat
 steal() { awk '/^cpu /{print $9}' /proc/stat; }
 STEAL_B="$(steal)"
 echo "TEMPO-L2 steal_before=$STEAL_B"
@@ -62,7 +59,6 @@ if [ "$GAP_DETECTOR" != 0 ]; then
       /bin/gap_detector --cpu "$GAPCPU" --duration-s "$GAP_DETECTOR" ) > /tmp/gap_detector.log 2>&1 &
 fi
 
-# print a --cpu flag when tempo.cpus is set
 pin() {
     if [ -n "$CPUS" ]; then
         echo "--cpu $1"
@@ -124,7 +120,7 @@ for f in sensor compute actuator telemetry detector; do
     if [ -s "/tmp/$f.log" ]; then
         sed -n 's/^/TEMPO-L2 /p' "/tmp/$f.log"
     else
-        echo "TEMPO-L2 no output from $f"
+        echo "TEMPO-L2 $f: no output"
     fi
 done
 if [ "$GAP_DETECTOR" != 0 ]; then
@@ -132,7 +128,7 @@ if [ "$GAP_DETECTOR" != 0 ]; then
     if [ -s /tmp/gap_detector.log ]; then
         sed -n 's/^/TEMPO-L2 /p' /tmp/gap_detector.log
     else
-        echo "TEMPO-L2 no output from gap_detector"
+        echo "TEMPO-L2 gap_detector: no output"
     fi
 fi
 
@@ -165,9 +161,9 @@ if [ -b /dev/vda ]; then
     dd if=/tmp/header.txt of=/dev/vda bs=4096 count=1 conv=sync 2>/dev/null
     [ "$SZ" -gt 0 ] && dd if=/tmp/telemetry.bin of=/dev/vda bs=4096 seek=1 conv=notrunc 2>/dev/null
     sync
-    echo "TEMPO-L2 wrote $SZ bytes of records to /dev/vda"
+    echo "TEMPO-L2 bytes=$SZ"
 else
-    echo "TEMPO-L2 NO /dev/vda -- records cannot be returned"
+    echo "TEMPO-L2 NO /dev/vda"
 fi
 
 echo "TEMPO-L2 done"

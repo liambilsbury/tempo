@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Compare the interference L1 saw arrive at the guest's cores with what the guest saw"""
-
 import argparse
 import json
 import struct
@@ -18,13 +16,11 @@ HDR = struct.Struct("<7Q4I")
 
 
 def read_frames(path):
-    """read the telemetry records of a run"""
     raw = Path(path).read_bytes()
     return [HDR.unpack_from(raw, i) for i in range(0, len(raw), HDR.size)]
 
 
 def read_header(path):
-    """parse the key=value lines of a header file"""
     out = {}
     for line in Path(path).read_text(errors="replace").splitlines():
         if "=" in line:
@@ -37,7 +33,6 @@ REMOTE_TLB_REASONS = ("reason=1", "reason=4")
 
 
 def is_remote(kind, detail):
-    """return True when an event is work another core sent to this one"""
     if kind.startswith("ipi"):
         return True
     if kind == "tlb":
@@ -46,7 +41,6 @@ def is_remote(kind, detail):
 
 
 def read_events(path, targets, lo, hi):
-    """count the L1 events aimed at the target cores inside the window"""
     hit, elsewhere, by = 0, 0, Counter()
     local = 0
     for line in Path(path).read_text(errors="replace").splitlines():
@@ -73,7 +67,6 @@ def read_events(path, targets, lo, hi):
 
 
 def delivered_quality(frames, modes_full):
-    """look up the delivered quality of a run from the frozen error curve"""
     if not frames:
         return {}
     done = [f[10] for f in frames]
@@ -99,7 +92,6 @@ def delivered_quality(frames, modes_full):
 
 
 def range_metrics(frames, a, b, period, hdr, meta, clock):
-    """return the frames lost, worst latency and window coverage over frames [a, b)"""
     recs = {f[0]: f for f in frames}
     lost = sum(1 for s in range(a, b)
                if s not in recs or (recs[s][4] and recs[s][1] and recs[s][4] - recs[s][1] > period))
@@ -125,19 +117,17 @@ def range_metrics(frames, a, b, period, hdr, meta, clock):
 
 
 def pct(a, b):
-    """format a over b as a percentage"""
     return f"{100.0 * a / b:.2f}%" if b else "-"
 
 
 def main():
-    """print the comparison and the FACT line of a run"""
     ap = argparse.ArgumentParser()
     ap.add_argument("--outdir", required=True)
     ap.add_argument("--pin", default="")
     ap.add_argument("--period-ns", type=int, default=1000000)
     ap.add_argument("--top", type=int, default=5)
     ap.add_argument("--late-range", default="",
-                    help="A-B: frame range to report losses over")
+                    help="A-B")
     args = ap.parse_args()
 
     out = Path(args.outdir)
@@ -162,7 +152,6 @@ def main():
     steal_ticks = steal_a - steal_b
 
     def at(p):
-        """return the latency at quantile p"""
         return lat_sorted[min(int(p * len(lat_sorted)), len(lat_sorted) - 1)] if lat_sorted else 0
 
     print(f"=== {out.name} ===")
@@ -170,26 +159,24 @@ def main():
           f"rate_hz={meta.get('INJECT rate_hz', '-')} window={(hi - lo) / 1e9:.2f}s")
     print()
     print("-- L1 --")
-    print(f"  interference events aimed at {sorted(targets) or 'any'}   {hit}")
-    print(f"  events aimed elsewhere                     {elsewhere}")
-    print(f"  local flushes                              {local}")
+    print(f"  hits on {sorted(targets) or 'any'}   {hit}")
+    print(f"  elsewhere      {elsewhere}")
+    print(f"  local          {local}")
     for k, v in by.most_common(args.top):
         print(f"    {v:8}  {k}")
     print()
     print("-- L2 latency --")
-    print(f"  frames recorded         {len(frames)}")
-    print(f"  latency p50/p99/p99.9   {at(.5)/1000:.1f} / {at(.99)/1000:.1f} / "
+    print(f"  frames                  {len(frames)}")
+    print(f"  p50/p99/p99.9           {at(.5)/1000:.1f} / {at(.99)/1000:.1f} / "
           f"{at(.999)/1000:.1f} us")
     print(f"  max                     {(lat_sorted[-1] if lat_sorted else 0)/1000:.1f} us")
     print(f"  over deadline           {len(late)}  ({pct(len(late), len(lat))})")
     print()
     print("-- L2 visibility --")
-    print(f"  steal ticks accrued     {steal_ticks}")
-    print(f"  events it can name      0 of {hit}")
+    print(f"  steal ticks             {steal_ticks}")
     comp = sorted(f[3] - f[2] for f in frames if f[3] and f[2])
 
     def cat(s, p):
-        """return the value of a sorted list at quantile p"""
         return s[min(int(p * len(s)), len(s) - 1)] if s else 0
 
     dropped = (frames[-1][0] + 1) - len(frames) if frames else 0
@@ -201,7 +188,7 @@ def main():
     in_loop = {k: hdr[k] for k in hdr if k.startswith("inloop_")}
     if q or in_loop:
         print()
-        print("-- L2 quality and in-loop --")
+        print("-- L2 quality --")
         for k, v in sorted(q.items()):
             print(f"  {k:22}  {v}")
         for k, v in sorted(in_loop.items()):
@@ -226,7 +213,7 @@ def main():
     if args.late_range:
         a, _, b = args.late_range.partition("-")
         if not (a.isdigit() and b.isdigit() and int(a) < int(b)):
-            raise SystemExit(f"compare: --late-range must be A-B with A < B, not {args.late_range!r}")
+            raise SystemExit(f"compare: bad --late-range {args.late_range!r}")
         clock = read_header(out / "clock.meta") if (out / "clock.meta").exists() else {}
         fact.update(range_metrics(frames, int(a), int(b), deadline, hdr, meta, clock))
     print("  FACT " + " ".join(f"{k}={v}" for k, v in fact.items()))

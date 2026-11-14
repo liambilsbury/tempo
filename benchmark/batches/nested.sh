@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# print and run the launch and scorer commands of an earlier-phase batch
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.." || exit
 DRY=0; [ "${1:-}" = "--dry-run" ] && { DRY=1; shift; }
@@ -7,20 +6,18 @@ B="${1:-}"
 O=results/experiments/earlier-
 BATCHES="fixed kernels classes class-predictions probe-overhead exit-counter-overhead steal-gap gap-detector anchor adapt feedback classes-sweep frequency-sweep in-loop slack guarantee budget budget-class trigger trigger-completion quality calibration"
 [ "$B" = "--list" ] && { echo $BATCHES; exit 0; }
-usage() { echo "usage: bash benchmark/batches/nested.sh [--dry-run] <batch> | --list" >&2; exit 2; }
+usage() { echo "usage: benchmark/batches/nested.sh [--dry-run] <batch> | --list" >&2; exit 2; }
 [[ " $BATCHES " == *" $B "* ]] || usage
 RC=0
 topo="$(python3 -c "import sys; sys.path.insert(0, '.'); from benchmark import lib; print(lib.host_topology()['topology'])")"
-[ "$topo" = nested ] || echo "earlier_phase: host prerequisite you supply -- this host is $topo, not nested; results go to results/experiments/ as $topo"
-# print and run a launch command
+[ "$topo" = nested ] || echo "earlier_phase: host prerequisite you supply -- topology=$topo"
 P() { echo "+ $*"; if [ "$DRY" = 1 ]; then "$@" --dry-run || RC=1; else "$@" || RC=1; fi; }
-# print and run a scorer command
 S() {
     echo "+ $*"
     local f; f="$(grep -oE '(benchmark|tools)/[a-z_0-9/]*\.py' <<<"$*" | head -1)"
-    if [[ "$f" == tools/results/* ]] && [ ! -f "$f" ]; then echo "earlier_phase: skipping $f, which is not in this tree"; return; fi
+    if [[ "$f" == tools/results/* ]] && [ ! -f "$f" ]; then echo "earlier_phase: skip $f"; return; fi
     if [ "$DRY" = 1 ]; then
-        [ -f "$f" ] || { echo "earlier_phase: $f is missing" >&2; RC=1; }
+        [ -f "$f" ] || { echo "earlier_phase: no $f" >&2; RC=1; }
     else "$@" || RC=1; fi
 }
 case "$B" in
@@ -253,5 +250,5 @@ calibration)
         --condition calibration:wake:2000
     ;;
 esac
-[ "$DRY" = 1 ] && { [ "$RC" = 0 ] && echo "earlier_phase: plan ok -- nothing was run" || echo "earlier_phase: plan FAILS" >&2; }
+[ "$DRY" = 1 ] && { [ "$RC" = 0 ] && echo "earlier_phase: plan ok" || echo "earlier_phase: plan FAILS" >&2; }
 exit "$RC"

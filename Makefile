@@ -1,4 +1,3 @@
-# build the Tempo host tools and the Android targets
 IMAGESTREAMIO   := third_party/ImageStreamIO
 IMAGESTREAMIO_LIB := $(IMAGESTREAMIO)/build/libImageStreamIO.so
 
@@ -14,13 +13,13 @@ BIN := build/pipeline build/inject build/irq_trigger
 all: $(BIN)
 
 help:
-	@echo "make                    the pipeline, injector and interrupt trigger into build/"
-	@echo "make dependencies       fetch the pinned ImageStreamIO into third_party/"
-	@echo "make lint               pyflakes and shellcheck -S warning over the tracked files"
-	@echo "make android            the Android pipeline, needs NDK=<ndk root>"
-	@echo "make android-app        build/android/tempo-loop.apk, needs NDK=<ndk root> SDK=<sdk root>"
-	@echo "make rhizo-vm-cpu-load  the static cpu_load for a Rhizo VM guest"
-	@echo "make clean              remove the host binaries"
+	@echo "make                    build/pipeline build/inject build/irq_trigger"
+	@echo "make dependencies       third_party/ImageStreamIO"
+	@echo "make lint               pyflakes, shellcheck -S warning"
+	@echo "make android            NDK="
+	@echo "make android-app        build/android/tempo-loop.apk NDK= SDK="
+	@echo "make rhizo-vm-cpu-load  static cpu_load"
+	@echo "make clean"
 
 lint:
 	@bash tools/lint.sh
@@ -55,17 +54,14 @@ android: build/android/pipeline
 android-app: build/android/tempo-loop.apk
 rhizo-vm-cpu-load: build/rhizo_vm/cpu_load
 
-# Android pipeline with ImageStreamIO compiled in
 build/android/pipeline: src/android/pipeline.c src/android/args.h src/pipeline/pipeline.c src/pipeline/frame.h src/pipeline/reconstruct.h src/pipeline/reserve.h $(IMAGESTREAMIO_LIB)
-	@test -x "$(ACLANG)" || { echo "android: no clang at $(ACLANG); set NDK=<ndk root> or ANDROID_NDK_HOME" >&2; exit 1; }
+	@test -x "$(ACLANG)" || { echo "android: no $(ACLANG)" >&2; exit 1; }
 	mkdir -p $(@D)
 	$(ACLANG) $(ACFLAGS) $(CPPFLAGS) -o $@ src/android/pipeline.c $(IMAGESTREAMIO)/ImageStreamIO.c -landroid -lm
 
-# native activity APK with the pipeline
 build/android/tempo-loop.apk: build/android/pipeline $(wildcard src/android/app/*) tools/build/android_app.sh
 	NDK="$(NDK)" SDK="$(SDK)" bash tools/build/android_app.sh
 
-# static cpu_load for any Rhizo VM guest
 build/rhizo_vm/cpu_load: src/android/cpu_load.c
 	mkdir -p $(@D)
 	$(CC) $(CFLAGS) -static -o $@ src/android/cpu_load.c -lpthread

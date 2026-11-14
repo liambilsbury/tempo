@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
-# boot a L2 guest, run a matrix row in it and copy its records back to L1
-#
-# Usage: benchmark/run/l2.sh --label sched-fifo --frames 2000 --sched fifo --vcpus 4 \
-#                   --pin 8,9,10,11 --kernel build/kernel-rt/vmlinuz \
-#                   --guest-args "isolcpus=1-3 nohz_full=1-3 rcu_nocbs=1-3"
-#   --pin CPUS        L1 cores the qemu process runs on
-#   --kernel PATH     guest kernel, default the running kernel's image
-#   --guest-args S    extra guest kernel command line
-#   --outdir DIR      output directory, default build/l2-runs/<label>
-#   --trigger irq     frames start on a UART interrupt
-#   --timeout S       kill qemu after S seconds, default frames x period + 180
+usage() {
+    cat <<'EOF2'
+usage: benchmark/run/l2.sh [--label NAME] [--frames N] [--period-ns N] [--slopes N] [--acts N]
+           [--sched P] [--prio N] [--vcpus N] [--mem MB] [--pin CPUS] [--kernel PATH]
+           [--guest-args S] [--outdir DIR] [--timeout S] [--trigger timer|irq] [--reconstruct M]
+           [--tier N] [--modes N] [--alpha X] [--quality N] [--adapt M] [--block N] [--block-ns N]
+EOF2
+}
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
@@ -45,7 +42,7 @@ while [ $# -gt 0 ]; do
         --block) BLOCK="$2"; shift 2;;
         --block-ns) BLOCKNS="$2"; shift 2;;
         --trigger) TRIGGER="$2"; shift 2;;
-        -h|--help) sed -n '2,12p' "$0"; exit 0;;
+        -h|--help) usage; exit 0;;
         *) echo "run_l2: unknown argument '$1'" >&2; exit 2;;
     esac
 done
@@ -53,7 +50,6 @@ done
 INITRAMFS="$ROOT/build/l2-initramfs.cpio.gz"
 [ -f "$INITRAMFS" ] || bash tools/build/make_image.sh >/dev/null
 
-# print a bzImage's release and preempt model
 image_version() {
     python3 - "$1" <<'PY' 2>/dev/null || echo "- -"
 import re, struct, sys
@@ -81,21 +77,19 @@ if [ -z "$KERNEL" ]; then
     elif [ -e "/boot/vmlinuz-$REL" ]; then
         KERNEL="$CACHE"
         KERNEL_SRC="/boot/vmlinuz-$REL"
-        [ -f "$CACHE" ] && echo "run_l2: $CACHE holds $(image_version "$CACHE" | cut -d' ' -f1), not $REL -- replacing it" >&2
         mkdir -p "$ROOT/build"
         sudo cp "/boot/vmlinuz-$REL" "$KERNEL"
         sudo chmod 644 "$KERNEL"
         sudo chown "$(id -u):$(id -g)" "$KERNEL"
     else
         {
-            echo "run_l2: no image for the running kernel $REL; installed:"
+            echo "run_l2: no image $REL; installed:"
             ls /usr/lib/modules 2>/dev/null | sed 's/^/run_l2:   /'
-            echo "run_l2: pass --kernel or TEMPO_KERNEL"
         } >&2
         exit 2
     fi
 fi
-[ -r "$KERNEL" ] || { echo "run_l2: kernel $KERNEL is not readable" >&2; exit 2; }
+[ -r "$KERNEL" ] || { echo "run_l2: $KERNEL unreadable" >&2; exit 2; }
 
 OUTDIR="${OUTDIR:-$ROOT/build/l2-runs/$LABEL}"
 mkdir -p "$OUTDIR"
@@ -141,7 +135,6 @@ QEMU=(qemu-system-x86_64
 echo "run_l2: $LABEL  vcpus=$VCPUS pin=${PIN:-none} frames=$FRAMES sched=$SCHED"
 echo "run_l2: kernel $KERNEL_ARM $IMG_REL $IMG_PREEMPT ($KERNEL)"
 
-# print a qemu pid's user plus system CPU time in ns
 qemu_cpu_ns() {
     local pid="$1" t
     t=$(awk '{print $14+$15}' "/proc/$pid/stat" 2>/dev/null) || return 1
@@ -155,9 +148,7 @@ else
 fi
 QPID=$!
 
-# print the first qemu pid
 find_qemu() { ps -eo pid,comm | awk '$2 ~ /qemu/ {print $1; exit}'; }
-# print qemu's CPU time now in ns, or 0
 qcpu_now() {
     local p; p=$(find_qemu); [ -n "$p" ] || { echo 0; return; }
     qemu_cpu_ns "$p" 2>/dev/null || echo 0
@@ -196,14 +187,12 @@ if [ "$BYTES" -gt 0 ]; then
     truncate -s "$BYTES" "$OUTDIR/telemetry.bin"
 fi
 
-echo "run_l2: console  $CONSOLE"
-echo "run_l2: header   $OUTDIR/header.txt"
 if [ "$BYTES" -gt 0 ]; then
-    echo "run_l2: records  $OUTDIR/telemetry.bin ($BYTES bytes, $((BYTES / 72)) frames)"
+    echo "run_l2: frames=$((BYTES / 72))"
 elif grep -q '^mode=quality$' "$OUTDIR/header.txt" 2>/dev/null; then
-    echo "run_l2: quality  $(grep -c '^tier[0-9]_' "$OUTDIR/header.txt") tier lines"
+    echo "run_l2: tiers=$(grep -c '^tier[0-9]_' "$OUTDIR/header.txt")"
     grep '^tier[0-9]_' "$OUTDIR/header.txt" || true
 else
-    echo "run_l2: NO RECORDS returned -- see the console log" >&2
+    echo "run_l2: NO RECORDS" >&2
     exit 1
 fi

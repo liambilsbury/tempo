@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""The PC side of a Rhizo VM batch"""
 import argparse
 import json
 import os
@@ -16,7 +15,6 @@ from benchmark import lib  # noqa: E402
 
 
 def qmp_vcpus(sock, timeout=10):
-    """return [(cpu index, thread id)] from qemu's query-cpus-fast"""
     s = socket.socket(socket.AF_UNIX)
     s.settimeout(timeout)
     s.connect(sock)
@@ -37,9 +35,8 @@ def qmp_vcpus(sock, timeout=10):
 
 
 def plan(vcpus, tids, cpus, other):
-    """return {tid: cpu}: vCPU i on cpus[i], every other qemu thread on other"""
     if len(vcpus) != len(cpus):
-        raise ValueError(f"{len(vcpus)} vCPUs but {len(cpus)} host CPUs to pin them to")
+        raise ValueError(f"vcpus={len(vcpus)} cpus={len(cpus)}")
     pins = {tid: cpus[i] for i, (_, tid) in enumerate(sorted(vcpus))}
     for t in tids:
         pins.setdefault(t, other)
@@ -47,12 +44,10 @@ def plan(vcpus, tids, cpus, other):
 
 
 def threads(pid):
-    """return the thread ids of a process"""
     return sorted(int(t) for t in os.listdir(f"/proc/{pid}/task"))
 
 
 def pin(sock, pid, cpus, other, state, get=os.sched_getaffinity, put=os.sched_setaffinity, vcpus=None, tids=None):
-    """pin a qemu's threads, writing their prior affinity to the state file first"""
     vcpus = vcpus if vcpus is not None else qmp_vcpus(sock)
     tids = tids if tids is not None else threads(pid)
     pins = plan(vcpus, tids, cpus, other)
@@ -65,7 +60,6 @@ def pin(sock, pid, cpus, other, state, get=os.sched_getaffinity, put=os.sched_se
 
 
 def check(state, get=os.sched_getaffinity):
-    """return 1 when every vCPU thread is still on its own host CPU alone"""
     st = json.loads(Path(state).read_text())
     try:
         return int(all(sorted(get(tid)) == [st["pins"][str(tid)]] for _, tid in st["vcpus"]))
@@ -74,7 +68,6 @@ def check(state, get=os.sched_getaffinity):
 
 
 def restore(state, put=os.sched_setaffinity, alive=None):
-    """put back each pinned thread's prior affinity, skipping threads that are gone"""
     st = json.loads(Path(state).read_text())
     alive = alive or (lambda t: Path(f"/proc/{st['pid']}/task/{t}").exists())
     done = 0
@@ -89,18 +82,15 @@ def restore(state, put=os.sched_setaffinity, alive=None):
 
 
 def qemu_pids():
-    """return the pids of every running qemu-system process"""
     r = subprocess.run(["pgrep", "-f", "^[^ ]*qemu-system-"], capture_output=True, text=True)
     return sorted(int(p) for p in r.stdout.split())
 
 
 def ceiling(vcpus, level, duty):
-    """return the PC's load1 ceiling"""
     return lib.LOAD_CEILING + vcpus + (vcpus * duty / 100 if level == "pc" else 0)
 
 
 def exclusive(qemu_pid, vcpus, facts=None, qemus=None, level="none", duty=0):
-    """return the PC's idle check"""
     f = facts if facts is not None else lib.check_exclusive()
     q = qemus if qemus is not None else qemu_pids()
     top = ceiling(vcpus, level, duty)
@@ -118,7 +108,6 @@ def exclusive(qemu_pid, vcpus, facts=None, qemus=None, level="none", duty=0):
 
 
 def settle(top, max_s=90, every_s=5, load=None, sleep=None):
-    """wait up to max_s for load1 at or under top"""
     load = load or (lambda: os.getloadavg()[0])
     sleep = sleep or time.sleep
     waited, now = 0, load()
@@ -131,74 +120,69 @@ def settle(top, max_s=90, every_s=5, load=None, sleep=None):
 
 
 def selftest():
-    """check the pin plan, the state round trip and the idle rule on built inputs"""
     cases = []
     vcpus = [(1, 501), (0, 500), (3, 503), (2, 502)]
     p = plan(vcpus, [500, 501, 502, 503, 600, 601], [8, 9, 10, 11], 12)
-    cases.append(("vCPU i goes to CPU i of the list, by index not by tid order",
+    cases.append(("plan: vCPU index i -> cpus[i], others -> other",
                   p == {500: 8, 501: 9, 502: 10, 503: 11, 600: 12, 601: 12}))
     try:
         plan(vcpus, [], [8, 9, 10], 12)
-        cases.append(("four vCPUs on three CPUs is refused", False))
+        cases.append(("plan 4 vCPUs, 3 cpus: ValueError", False))
     except ValueError:
-        cases.append(("four vCPUs on three CPUs is refused", True))
+        cases.append(("plan 4 vCPUs, 3 cpus: ValueError", True))
     aff = {t: {0, 1, 2, 3, 8, 9, 10, 11, 12} for t in (500, 501, 502, 503, 600)}
 
     def get(t):
-        """return a built thread's affinity"""
         return set(aff[t])
 
     def put(t, cpus):
-        """set a built thread's affinity"""
         aff[t] = set(cpus)
     with tempfile.TemporaryDirectory() as td:
         st = Path(td) / "vcpus.json"
         pin(None, 1, [8, 9, 10, 11], 12, st, get=get, put=put, vcpus=vcpus, tids=[500, 501, 502, 503, 600])
         saved = json.loads(st.read_text())
-        cases.append(("the prior affinity is saved before pinning", saved["prior"]["500"] == [0, 1, 2, 3, 8, 9, 10, 11, 12]))
-        cases.append(("every thread is on its CPU", aff[502] == {10} and aff[600] == {12}))
-        cases.append(("a pinned VM checks as pinned", check(st, get=get) == 1))
+        cases.append(("pin: prior affinity saved", saved["prior"]["500"] == [0, 1, 2, 3, 8, 9, 10, 11, 12]))
+        cases.append(("pin: affinity set", aff[502] == {10} and aff[600] == {12}))
+        cases.append(("check pinned: 1", check(st, get=get) == 1))
         aff[503] = {8, 11}
-        cases.append(("a vCPU moved off its CPU checks as not pinned", check(st, get=get) == 0))
+        cases.append(("check vCPU moved: 0", check(st, get=get) == 0))
         n = restore(st, put=put, alive=lambda t: t != 600)
-        cases.append(("restore puts back every live thread and skips a gone one",
+        cases.append(("restore: 4 restored, gone tid skipped",
                       n == 4 and aff[500] == {0, 1, 2, 3, 8, 9, 10, 11, 12} and aff[600] == {12}))
-        cases.append(("restore again is the same", restore(st, put=put, alive=lambda t: t != 600) == 4))
+        cases.append(("restore twice: 4", restore(st, put=put, alive=lambda t: t != 600) == 4))
     idle = {"load1": 0.4, "free_gb": 200.0, "foreign_pipelines": 0}
-    cases.append(("an idle PC with only this VM is exclusive", exclusive(7, 4, idle, [7])["exclusive"] == 1))
-    cases.append(("the VM's own vCPUs raise the load ceiling by one each", exclusive(7, 4, dict(idle, load1=4.9), [7])["exclusive"] == 1))
-    for name, f, q in (("a load above 1 plus the vCPUs is not exclusive", dict(idle, load1=5.2), [7]),
-                       ("a second qemu is not exclusive", idle, [7, 8]),
-                       ("a full disk is not exclusive", dict(idle, free_gb=10.0), [7]),
-                       ("a foreign pipeline is not exclusive", dict(idle, foreign_pipelines=1), [7])):
+    cases.append(("load1=0.4 qemus=[7]: exclusive=1", exclusive(7, 4, idle, [7])["exclusive"] == 1))
+    cases.append(("load1=4.9 vcpus=4: exclusive=1", exclusive(7, 4, dict(idle, load1=4.9), [7])["exclusive"] == 1))
+    for name, f, q in (("load1=5.2 vcpus=4: exclusive=0", dict(idle, load1=5.2), [7]),
+                       ("qemus=[7, 8]: exclusive=0", idle, [7, 8]),
+                       ("free_gb=10: exclusive=0", dict(idle, free_gb=10.0), [7]),
+                       ("foreign_pipelines=1: exclusive=0", dict(idle, foreign_pipelines=1), [7])):
         r = exclusive(7, 4, f, q)
         cases.append((name, r["exclusive"] == 0 and " " not in r["why"]))
-    cases.append(("a PC load's own duty on each vCPU's CPU raises its arm's ceiling",
+    cases.append(("ceiling pc/30=6.2, vm/30=5, none=5",
                   ceiling(4, "pc", 30) == 1 + 4 + 1.2 and ceiling(4, "vm", 30) == 5 and ceiling(4, "none", 0) == 5))
-    cases.append(("a PC-load arm under its own load is exclusive",
+    cases.append(("pc duty=30 load1=6.1: exclusive=1",
                   exclusive(7, 4, dict(idle, load1=6.1), [7], level="pc", duty=30)["exclusive"] == 1))
-    cases.append(("a PC-load arm above its own load is not exclusive",
+    cases.append(("pc duty=30 load1=6.3: exclusive=0",
                   exclusive(7, 4, dict(idle, load1=6.3), [7], level="pc", duty=30)["exclusive"] == 0))
-    cases.append(("a VM-load arm gets no PC-load allowance",
+    cases.append(("vm duty=30 load1=6.1: exclusive=0",
                   exclusive(7, 4, dict(idle, load1=6.1), [7], level="vm", duty=30)["exclusive"] == 0))
-    cases.append(("the idle check names the ceiling", exclusive(7, 4, idle, [7], level="pc", duty=30)["ceiling"] == 6.2))
+    cases.append(("exclusive pc duty=30: ceiling=6.2", exclusive(7, 4, idle, [7], level="pc", duty=30)["ceiling"] == 6.2))
     slept = []
 
     def loads(*xs):
-        """return a load reader that gives xs in turn, then the last one forever"""
         it = iter(xs)
         last = [xs[-1]]
 
         def read():
-            """return the next built load1"""
             last[0] = next(it, last[0])
             return last[0]
         return read
-    cases.append(("a PC already under its ceiling settles at once", settle(5.0, load=loads(4.0), sleep=slept.append) == (0, 4.0)))
-    cases.append(("a load falling under the ceiling is waited for, polled every 5 s",
+    cases.append(("settle 4.0, top=5: (0, 4.0)", settle(5.0, load=loads(4.0), sleep=slept.append) == (0, 4.0)))
+    cases.append(("settle 7,6,5, top=5: (10, 5.0), sleeps [5, 5]",
                   settle(5.0, load=loads(7.0, 6.0, 5.0), sleep=slept.append) == (10, 5.0) and slept == [5, 5]))
     slept.clear()
-    cases.append(("a load that never falls is waited for 90 s at most", settle(5.0, load=loads(9.0), sleep=slept.append) == (90, 9.0)
+    cases.append(("settle 9.0, top=5: (90, 9.0), 18 sleeps", settle(5.0, load=loads(9.0), sleep=slept.append) == (90, 9.0)
                   and sum(slept) == 90 and len(slept) == 18))
     bad = [n for n, ok in cases if not ok]
     for n, ok in cases:
@@ -208,7 +192,6 @@ def selftest():
 
 
 def main(argv=None):
-    """run a subcommand"""
     ap = argparse.ArgumentParser()
     ap.add_argument("--selftest", action="store_true")
     sub = ap.add_subparsers(dest="cmd")
@@ -231,11 +214,11 @@ def main(argv=None):
     if a.selftest:
         return selftest()
     if a.cmd == "pin":
-        print(f"pinned {len(pin(a.qmp, a.pid, [int(c) for c in a.cpus.split(',')], a.other, a.state))} threads")
+        print(f"pinned={len(pin(a.qmp, a.pid, [int(c) for c in a.cpus.split(',')], a.other, a.state))}")
     elif a.cmd == "check":
         print(f"vcpus_pinned={check(a.state)}")
     elif a.cmd == "restore":
-        print(f"restored {restore(a.state)} threads")
+        print(f"restored={restore(a.state)}")
     elif a.cmd == "exclusive":
         print(" ".join(f"{k}={v}" for k, v in exclusive(a.qemu_pid, a.vcpus, level=a.level, duty=a.duty).items()))
     elif a.cmd == "settle":

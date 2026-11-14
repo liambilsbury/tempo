@@ -1,4 +1,3 @@
-// run a stage of the sensor, compute, actuator, telemetry pipeline over ImageStreamIO
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -25,7 +24,6 @@
 #define telemetry_frame_written() ((void)0)
 #endif
 
-// attributes for sched_setattr
 struct sched_attr_ {
     uint32_t size, sched_policy;
     uint64_t sched_flags;
@@ -34,14 +32,12 @@ struct sched_attr_ {
     uint64_t sched_runtime, sched_deadline, sched_period;
 };
 
-// call sched_setattr directly
 static int sched_setattr_(pid_t pid, struct sched_attr_ *a, unsigned int flags)
 {
     return (int)syscall(__NR_sched_setattr, pid, a, flags);
 }
 
 
-// command-line options of a stage
 struct opt {
     const char *stage;
     const char *tag;
@@ -68,7 +64,6 @@ struct opt {
     const char *irq_dev;
 };
 
-// print the errno message and exit 2
 static void die(const char *what)
 {
     fprintf(stderr, "pipeline: %s: %s\n", what, strerror(errno));
@@ -76,7 +71,6 @@ static void die(const char *what)
 }
 
 
-// apply the CPU pin and scheduling policy and lock memory
 static void apply_sched(const struct opt *o)
 {
     if (o->cpu >= 0) {
@@ -107,7 +101,7 @@ static void apply_sched(const struct opt *o)
     }
 
     if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0)
-        fprintf(stderr, "pipeline: mlockall failed (%s) -- page faults will pollute the tail\n",
+        fprintf(stderr, "pipeline: mlockall failed (%s)\n",
                 strerror(errno));
 
     printf("OBS policy=%s\nOBS prio=%d\nOBS cpu=%d\nOBS period_ns=%ld\n",
@@ -116,13 +110,11 @@ static void apply_sched(const struct opt *o)
 }
 
 
-// build a stream name from the run tag
 static void stream_name(char *dst, size_t n, const char *tag, const char *which)
 {
     snprintf(dst, n, "tempo_%s_%s", tag, which);
 }
 
-// create a stream of the header plus payload floats
 static void create_stream(IMAGE *im, const struct opt *o, const char *which, long payload)
 {
     char name[128];
@@ -130,20 +122,19 @@ static void create_stream(IMAGE *im, const struct opt *o, const char *which, lon
     stream_name(name, sizeof(name), o->tag, which);
     size[0] = (uint32_t)(HDR_FLOATS + payload);
     if (ImageStreamIO_createIm(im, name, 1, size, _DATATYPE_FLOAT, 1, 10, 0) != IMAGESTREAMIO_SUCCESS) {
-        fprintf(stderr, "pipeline: could not create stream %s\n", name);
+        fprintf(stderr, "pipeline: create %s failed\n", name);
         exit(2);
     }
     printf("OBS created=%s\n", name);
     fflush(stdout);
 }
 
-// wait for a stream to exist and open it
 static void open_stream(IMAGE *im, const struct opt *o, const char *which, long expect)
 {
     char name[128], path[512];
     stream_name(name, sizeof(name), o->tag, which);
     if (ImageStreamIO_filename(path, sizeof(path), name) != IMAGESTREAMIO_SUCCESS) {
-        fprintf(stderr, "pipeline: could not resolve a path for stream %s\n", name);
+        fprintf(stderr, "pipeline: no path for %s\n", name);
         exit(2);
     }
 
@@ -165,7 +156,7 @@ static void open_stream(IMAGE *im, const struct opt *o, const char *which, long 
         usleep(20000);
     }
     if (!ok) {
-        fprintf(stderr, "pipeline: stream %s (%s) never appeared\n", name, path);
+        fprintf(stderr, "pipeline: %s (%s) absent\n", name, path);
         exit(2);
     }
     int opened = 0;
@@ -178,20 +169,19 @@ static void open_stream(IMAGE *im, const struct opt *o, const char *which, long 
         usleep(20000);
     }
     if (!opened) {
-        fprintf(stderr, "pipeline: stream %s exists but would not open\n", name);
+        fprintf(stderr, "pipeline: open %s failed\n", name);
         exit(2);
     }
 
     uint64_t want = (uint64_t)(HDR_FLOATS + expect);
     if (im->md->nelement != want) {
         fprintf(stderr,
-                "pipeline: stream %s carries %llu floats, this stage expects %llu; "
-                "--slopes/--acts disagree between stages\n",
+                "pipeline: %s nelement %llu != %llu\n",
                 name, (unsigned long long)im->md->nelement, (unsigned long long)want);
         exit(2);
     }
     if (im->md->datatype != _DATATYPE_FLOAT) {
-        fprintf(stderr, "pipeline: stream %s is datatype %d, expected FLOAT\n",
+        fprintf(stderr, "pipeline: %s datatype %d != FLOAT\n",
                 name, (int)im->md->datatype);
         exit(2);
     }
@@ -200,14 +190,12 @@ static void open_stream(IMAGE *im, const struct opt *o, const char *which, long 
     fflush(stdout);
 }
 
-// publish a stream's new frame
 static void publish(IMAGE *im)
 {
     ImageStreamIO_UpdateIm(im);
 }
 
 
-// build the path of a stage's ready marker
 static void ready_path(char *dst, size_t n, const struct opt *o, const char *stage)
 {
     char sample[512];
@@ -217,7 +205,6 @@ static void ready_path(char *dst, size_t n, const struct opt *o, const char *sta
     snprintf(dst, n, "%s/tempo_%s_%s.ready", sample, o->tag, stage);
 }
 
-// create a stage's ready marker
 static void mark_ready(const struct opt *o, const char *stage)
 {
     char p[640];
@@ -229,7 +216,6 @@ static void mark_ready(const struct opt *o, const char *stage)
     fflush(stdout);
 }
 
-// wait up to 30 s for each stage's ready marker
 static void wait_ready(const struct opt *o, const char *const *stages, int n)
 {
     for (int i = 0; i < n; i++) {
@@ -242,7 +228,7 @@ static void wait_ready(const struct opt *o, const char *const *stages, int n)
             else usleep(20000);
         }
         if (!ok) {
-            fprintf(stderr, "pipeline: %s never became ready (%s)\n", stages[i], p);
+            fprintf(stderr, "pipeline: %s not ready (%s)\n", stages[i], p);
             exit(2);
         }
     }
@@ -250,7 +236,6 @@ static void wait_ready(const struct opt *o, const char *const *stages, int n)
     fflush(stdout);
 }
 
-// remove a stage's ready marker
 static void clear_ready(const struct opt *o, const char *stage)
 {
     char p[640];
@@ -261,7 +246,6 @@ static void clear_ready(const struct opt *o, const char *stage)
 
 #define STALL_SECONDS 5
 
-// wait for the stream counter to advance, return the advance or -1 on a stall
 static int wait_frame(IMAGE *im, int sem, uint64_t *last, uint64_t *spurious)
 {
     for (;;) {
@@ -281,7 +265,6 @@ static int wait_frame(IMAGE *im, int sem, uint64_t *last, uint64_t *spurious)
 }
 
 
-// open the irq device in raw mode
 static int open_irq_dev(const char *path)
 {
     int fd = open(path, O_RDONLY | O_NOCTTY);
@@ -299,7 +282,6 @@ static int open_irq_dev(const char *path)
     return fd;
 }
 
-// generate a frame each period or each irq byte and publish it on s0
 static int stage_sensor(const struct opt *o)
 {
     IMAGE s0;
@@ -363,7 +345,6 @@ static int stage_sensor(const struct opt *o)
     return 0;
 }
 
-// reconstruct each s0 frame into actuator commands on s1
 static int stage_compute(const struct opt *o)
 {
     IMAGE s0, s1;
@@ -420,7 +401,7 @@ static int stage_compute(const struct opt *o)
     for (;;) {
         int adv = wait_frame(&s0, sem, &last, &spurious);
         if (adv < 0) {
-            fprintf(stderr, "pipeline: compute stalled after %ld of %ld frames\n",
+            fprintf(stderr, "pipeline: compute stalled %ld/%ld\n",
                     seen, o->frames);
             break;
         }
@@ -509,7 +490,6 @@ static int stage_compute(const struct opt *o)
     return 0;
 }
 
-// stamp each s1 frame as sent and forward it on s2
 static int stage_actuator(const struct opt *o)
 {
     IMAGE s1, s2;
@@ -526,7 +506,7 @@ static int stage_actuator(const struct opt *o)
     for (;;) {
         int adv = wait_frame(&s1, sem, &last, &spurious);
         if (adv < 0) {
-            fprintf(stderr, "pipeline: actuator stalled after %ld of %ld frames\n",
+            fprintf(stderr, "pipeline: actuator stalled %ld/%ld\n",
                     seen, o->frames);
             break;
         }
@@ -550,7 +530,6 @@ static int stage_actuator(const struct opt *o)
     return 0;
 }
 
-// write each s2 frame header to the telemetry file
 static int stage_telemetry(const struct opt *o)
 {
     IMAGE s2;
@@ -569,7 +548,7 @@ static int stage_telemetry(const struct opt *o)
     for (;;) {
         int adv = wait_frame(&s2, sem, &last, &spurious);
         if (adv < 0) {
-            fprintf(stderr, "pipeline: telemetry stalled after %ld of %ld frames\n",
+            fprintf(stderr, "pipeline: telemetry stalled %ld/%ld\n",
                     got, o->frames);
             break;
         }
@@ -589,7 +568,6 @@ static int stage_telemetry(const struct opt *o)
 }
 
 
-// read the aggregate steal ticks from /proc/stat
 static long read_steal(void)
 {
     FILE *f = fopen("/proc/stat", "r");
@@ -607,14 +585,12 @@ static long read_steal(void)
     return v;
 }
 
-// compare two u64 values for qsort
 static int cmp_u64(const void *a, const void *b)
 {
     uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
     return x < y ? -1 : x > y;
 }
 
-// measure each periodic timer wakeup's lateness and the steal ticks over the run
 static int stage_detector(const struct opt *o)
 {
     apply_sched(o);
@@ -658,7 +634,6 @@ static int stage_detector(const struct opt *o)
     return 0;
 }
 
-// time each tier's reconstruction and compute its error against tier 0
 static int stage_quality(const struct opt *o)
 {
     struct reconstruct rec;
@@ -747,7 +722,6 @@ static int stage_quality(const struct opt *o)
 }
 
 
-// print usage and exit 2
 static void usage(void)
 {
     fprintf(stderr,
@@ -762,7 +736,6 @@ static void usage(void)
     exit(2);
 }
 
-// parse flags, check them and run the chosen stage
 int main(int argc, char **argv)
 {
     struct opt o = {
@@ -819,11 +792,11 @@ int main(int argc, char **argv)
         exit(2);
     }
     if (o.alpha <= 0.0) {
-        fprintf(stderr, "pipeline: --alpha %g must be positive\n", o.alpha);
+        fprintf(stderr, "pipeline: --alpha %g <= 0\n", o.alpha);
         exit(2);
     }
     if (o.stim <= 0) {
-        fprintf(stderr, "pipeline: --stim %ld must be positive\n", o.stim);
+        fprintf(stderr, "pipeline: --stim %ld <= 0\n", o.stim);
         exit(2);
     }
     if (strcmp(o.adapt, "off") && strcmp(o.adapt, "observe") && strcmp(o.adapt, "enforce")
@@ -832,17 +805,15 @@ int main(int argc, char **argv)
         exit(2);
     }
     if (o.block < 1) {
-        fprintf(stderr, "pipeline: --block %ld must be at least 1\n", o.block);
+        fprintf(stderr, "pipeline: --block %ld < 1\n", o.block);
         exit(2);
     }
     if (strcmp(o.adapt, "off") && o.block_ns <= 0) {
-        fprintf(stderr, "pipeline: --adapt %s needs --block-ns, the declared cost of a block "
-                        "of %ld modes, see results/earlier_phase/frozen/quality-frozen.json\n", o.adapt, o.block);
+        fprintf(stderr, "pipeline: --adapt %s needs --block-ns\n", o.adapt);
         exit(2);
     }
     if (strcmp(o.adapt, "off") && strcmp(o.reconstruct, "modal")) {
-        fprintf(stderr, "pipeline: --adapt %s needs --reconstruct modal; the dense reconstruction has "
-                        "nothing to stop early\n", o.adapt);
+        fprintf(stderr, "pipeline: --adapt %s needs --reconstruct modal\n", o.adapt);
         exit(2);
     }
     if (strcmp(o.trigger, "timer") && strcmp(o.trigger, "irq")) {
@@ -850,8 +821,7 @@ int main(int argc, char **argv)
         exit(2);
     }
     if (!strcmp(o.trigger, "irq") && !o.irq_dev) {
-        fprintf(stderr, "pipeline: --trigger irq needs --irq-dev, the device the sensor blocks "
-                        "on for a frame start\n");
+        fprintf(stderr, "pipeline: --trigger irq needs --irq-dev\n");
         exit(2);
     }
 

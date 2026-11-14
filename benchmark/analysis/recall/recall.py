@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Print the guest's steal and lateness recall of the CPU the cpu-load injector took"""
-
 import argparse
 import sys
 from pathlib import Path
@@ -13,7 +11,6 @@ TICK_NS = 1_000_000_000 // USER_HZ
 CPU_LOAD = ("cpu-load", "hog")
 
 def read_kv(path):
-    """parse the key=value tokens of a meta file"""
     out = {}
     if not Path(path).exists():
         return out
@@ -27,7 +24,6 @@ def read_kv(path):
 
 
 def one(outdir):
-    """print the recall of a run directory"""
     out = Path(outdir)
     meta = read_kv(out / "inject.meta")
     hdr = read_kv(out / "l2" / "header.txt")
@@ -42,27 +38,25 @@ def one(outdir):
     print(f"=== {out.name} ===")
     print(f"  class                     {mode}")
     if mode in CPU_LOAD and injected_ns:
-        print(f"  CPU the injector took     {injected_ns/1e9:.3f} s")
-    print(f"  guest steal ticks         {steal_ticks}  = {steal_ticks*TICK_NS/1e9:.3f} s "
-          f"at {USER_HZ} Hz granularity")
-    print(f"  guest summed lateness     {sum_late/1e9:.3f} s over a {window/1e9:.1f} s window")
+        print(f"  injected                  {injected_ns/1e9:.3f} s")
+    print(f"  steal ticks               {steal_ticks} = {steal_ticks*TICK_NS/1e9:.3f} s")
+    print(f"  summed lateness           {sum_late/1e9:.3f} s / {window/1e9:.1f} s")
 
     if mode in CPU_LOAD and injected_ns:
         by_steal = steal_ticks * TICK_NS / injected_ns
         by_late = sum_late / injected_ns
-        print(f"  RECALL by steal counter   {by_steal:.3f}")
-        print(f"  RECALL by summed lateness {by_late:.3f}")
+        print(f"  RECALL steal              {by_steal:.3f}")
+        print(f"  RECALL late               {by_late:.3f}")
         if by_late > 0 and by_steal > 0:
-            print(f"  the two guest signals disagree by {max(by_late/by_steal, by_steal/by_late):.1f}x")
+            print(f"  disagree {max(by_late/by_steal, by_steal/by_late):.1f}x")
         print(f"  FACT class={mode} injected_ns={injected_ns} stolen_ns={steal_ticks*TICK_NS} "
               f"late_ns={sum_late} recall_steal={by_steal:.4f} recall_late={by_late:.4f}")
     else:
-        print("  no measured CPU denominator for this class")
+        print("  no denominator")
     return 0
 
 
 def collect(pattern):
-    """return the recall of each cpu-load round matching a glob"""
     rows = []
     for d in sorted(Path("results/experiments").glob(pattern)):
         meta = read_kv(d / "inject.meta")
@@ -82,19 +76,17 @@ def collect(pattern):
 
 
 def med(xs):
-    """return the median of a list, or None when it is empty"""
     s = sorted(xs)
     n = len(s)
     return None if not n else (s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2)
 
 
 def paired(pattern):
-    """print the recall table across the matching rounds"""
     rows = collect(pattern)
     if not rows:
-        print(f"no completed hog rounds matching {pattern}", file=sys.stderr)
+        print(f"no rounds {pattern}", file=sys.stderr)
         return 1
-    print(f"=== recall across {len(rows)} hog rounds ({pattern}) ===\n")
+    print(f"=== recall {len(rows)} rounds ({pattern}) ===\n")
     print(f"{'round':16} {'injected s':>11} {'steal s':>9} {'late s':>9} "
           f"{'R_steal':>8} {'R_late':>8}")
     for r in rows:
@@ -102,25 +94,22 @@ def paired(pattern):
               f"{r['late_ns']/1e9:9.3f} {r['recall_steal']:8.3f} {r['recall_late']:8.3f}")
     rs = [r["recall_steal"] for r in rows]
     rl = [r["recall_late"] for r in rows]
-    print(f"\nmedian recall by steal counter    {med(rs):.3f}   "
-          f"range {min(rs):.3f}-{max(rs):.3f}")
-    print(f"median recall by summed lateness  {med(rl):.3f}   "
-          f"range {min(rl):.3f}-{max(rl):.3f}")
+    print(f"\nmedian steal {med(rs):.3f}  range {min(rs):.3f}-{max(rs):.3f}")
+    print(f"median late  {med(rl):.3f}  range {min(rl):.3f}-{max(rl):.3f}")
     return 0
 
 
 def main():
-    """report a run or the matching rounds"""
     ap = argparse.ArgumentParser()
     ap.add_argument("--outdir")
     ap.add_argument("--paired", nargs="?", const="hogsync-r*",
-                    help="glob over results/experiments, default hogsync-r*")
+                    help="glob")
     args = ap.parse_args()
     if args.outdir:
         return one(args.outdir)
     if args.paired:
         return paired(args.paired)
-    ap.error("give --outdir or --paired")
+    ap.error("--outdir or --paired")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,3 @@
-"""Lint a bpftrace probe and check its event coverage"""
 import io
 import re
 import sys
@@ -12,14 +11,12 @@ _HELPER = re.compile(r"\b(" + "|".join(PER_EVENT_USERSPACE) + r")\b")
 
 
 def _strip_comments(text):
-    """remove comments and string contents from a probe source"""
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
     text = re.sub(r"//[^\n]*", "", text)
     return re.sub(r'"(?:\\.|[^"\\])*"', '""', text)
 
 
 def probe_blocks(text):
-    """return (header, body) of each top-level block"""
     text = _strip_comments(text)
     out, i, n = [], 0, len(text)
     while i < n:
@@ -42,7 +39,6 @@ def probe_blocks(text):
 
 
 def lint(text):
-    """return each (probe, helper) where a per-event body calls a userspace helper"""
     bad = []
     for header, body in probe_blocks(text):
         if header in ("BEGIN", "END") or header.startswith("interval:"):
@@ -53,7 +49,6 @@ def lint(text):
 
 
 def coverage(events_text, end_ns):
-    """return the last event time and whether it reaches end_ns"""
     last = None
     for line in events_text.splitlines():
         p = line.split()
@@ -69,21 +64,18 @@ def coverage(events_text, end_ns):
 
 
 def _covers_and_lost(cov, log_text):
-    """return the covers flag and the summed Lost N events count"""
     lost = sum(int(m) for m in re.findall(r"Lost (\d+) events", log_text))
     covers = 0 if lost > 0 else (None if cov is None else int(cov))
     return covers, lost
 
 
 def coverage_report(events_text, end_ns, log_text=""):
-    """return probe_covers_inject and probe_lost for an events file and probe log"""
     _, cov = coverage(events_text, end_ns)
     covers, lost = _covers_and_lost(cov, log_text)
     return {"probe_covers_inject": covers, "probe_lost": lost}
 
 
 def _inject_end(meta_text):
-    """parse INJECT end_ns from inject.meta"""
     for line in meta_text.splitlines():
         if line.startswith("INJECT end_ns="):
             try:
@@ -94,29 +86,28 @@ def _inject_end(meta_text):
 
 
 def selftest():
-    """check lint, coverage and the --coverage output on constructed input"""
     cases = []
     real = lint(PROBE.read_text())
-    cases.append(("the shipped probe resolves nothing in userspace per event"
+    cases.append(("lint(PROBE): []"
                   + (f" (found {real})" if real else ""), not real))
     hot = ("tracepoint:ipi:ipi_send_cpu\n{\n    printf(\"%s\\n\", ksym(args.callsite));\n}\n")
-    cases.append(("ksym in a tracepoint body is flagged", lint(hot) == [("tracepoint:ipi:ipi_send_cpu", "ksym")]))
+    cases.append(("lint tracepoint ksym: flagged", lint(hot) == [("tracepoint:ipi:ipi_send_cpu", "ksym")]))
     stack = "kprobe:foo { @[kstack] = count(); }\n"
-    cases.append(("kstack in a kprobe body is flagged", lint(stack) == [("kprobe:foo", "kstack")]))
+    cases.append(("lint kprobe kstack: flagged", lint(stack) == [("kprobe:foo", "kstack")]))
     cold = ("BEGIN { printf(\"ksym(x)\\n\"); }\nEND\n{\n    print(ksym(0));\n}\n"
             "/* ksym(args.callsite) in a comment */\ntracepoint:tlb:tlb_flush { printf(\"%d\\n\", args.reason); }\n")
-    cases.append(("BEGIN/END, comments and strings are not per-event", lint(cold) == []))
+    cases.append(("lint BEGIN/END/comment/string: []", lint(cold) == []))
     ev = "# header\nEV 100 tlb 3 -1 reason=0\nEV 250 ipi 4 8 0x1|0x2\n"
-    cases.append(("events past the window's end cover it", coverage(ev, 200) == (250, True)))
-    cases.append(("events that stop before the end do not", coverage(ev, 300) == (250, False)))
-    cases.append(("no events covers nothing", coverage("# header\n", 300) == (None, False)))
-    cases.append(("no window reads None, not covered", coverage(ev, 0) == (250, None)))
-    cases.append(("inject end parsed from inject.meta", _inject_end("INJECT start_ns=5\nINJECT end_ns=900\n") == 900))
+    cases.append(("coverage(ev, 200): (250, True)", coverage(ev, 200) == (250, True)))
+    cases.append(("coverage(ev, 300): (250, False)", coverage(ev, 300) == (250, False)))
+    cases.append(("coverage(no events): (None, False)", coverage("# header\n", 300) == (None, False)))
+    cases.append(("coverage(ev, 0): (250, None)", coverage(ev, 0) == (250, None)))
+    cases.append(("_inject_end: end_ns=900", _inject_end("INJECT start_ns=5\nINJECT end_ns=900\n") == 900))
     ev = "EV 100 x\nEV 900 y\n"
-    cases.append(("lost events void coverage",
+    cases.append(("Lost 12+3: covers=0 lost=15",
                   coverage_report(ev, 800, "Lost 12 events\nLost 3 events\n")
                   == {"probe_covers_inject": 0, "probe_lost": 15}))
-    cases.append(("no lost line reads 0",
+    cases.append(("no Lost line: covers=1 lost=0",
                   coverage_report(ev, 800, "Attaching 4 probes...\n")
                   == {"probe_covers_inject": 1, "probe_lost": 0}))
 
@@ -132,7 +123,6 @@ def selftest():
     missing_log_path.unlink(missing_ok=True)
 
     def _run_main(args):
-        """run main and capture its exit code, stdout and stderr"""
         old_out, old_err = sys.stdout, sys.stderr
         sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
         try:
@@ -142,12 +132,12 @@ def selftest():
             sys.stdout, sys.stderr = old_out, old_err
 
     rc, out, err = _run_main(["--coverage", str(ev_path), str(meta_path), str(log_path)])
-    cases.append(("main: a present log's Lost line is reported",
+    cases.append(("--coverage Lost 5: probe_lost=5",
                   "probe_lost=5" in out.splitlines() and "probe_covers_inject=0" in out.splitlines()))
     rc, out, err = _run_main(["--coverage", str(ev_path), str(meta_path), str(missing_log_path)])
-    cases.append(("main: a missing log reads unknown loss, not zero",
+    cases.append(("--coverage log missing: probe_lost=-",
                   "probe_lost=-" in out.splitlines() and "probe_covers_inject=0" in out.splitlines()
-                  and "missing" in err and "loss unknown" in err))
+                  and f"no {missing_log_path}" in err))
 
     scratch_dir.cleanup()
     bad = [n for n, ok in cases if not ok]
@@ -158,13 +148,12 @@ def selftest():
 
 
 def main(argv):
-    """run the selftest, lint or coverage subcommand"""
     if argv[:1] == ["--selftest"]:
         return selftest()
     if len(argv) == 2 and argv[0] == "--lint":
         bad = lint(Path(argv[1]).read_text())
         for h, f in bad:
-            print(f"{argv[1]}: {h} calls {f}() per event")
+            print(f"{argv[1]}: {h} {f}()")
         return 1 if bad else 0
     if len(argv) in (3, 4) and argv[0] == "--coverage":
         ev = Path(argv[1]).read_text(errors="replace") if Path(argv[1]).exists() else ""
@@ -177,7 +166,7 @@ def main(argv):
             except OSError:
                 print("probe_covers_inject=0")
                 print("probe_lost=-")
-                print(f"probe_check: probe log {argv[3]} missing -- loss unknown, coverage not confirmed",
+                print(f"probe_check: no {argv[3]}",
                       file=sys.stderr)
                 return 1
             covers, lost = _covers_and_lost(cov, log)

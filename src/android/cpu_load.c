@@ -1,4 +1,3 @@
-// pin a spinner to each cpu and log its windows in CLOCK_BOOTTIME
 #define _GNU_SOURCE
 #include <errno.h>
 #include <inttypes.h>
@@ -13,7 +12,6 @@
 
 #define MAX_CPUS 64
 
-// a spinner's CPU and recorded windows
 struct cpu_load {
     int cpu;
     int ran_cpu_first, ran_cpu_last;
@@ -25,13 +23,11 @@ struct cpu_load {
 static uint64_t epoch_ns, until_ns, slot_ns, on_ns;
 static int rt_prio;
 
-// convert a timespec to ns
 static uint64_t ts_ns(struct timespec ts)
 {
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-// return CLOCK_BOOTTIME in ns
 static uint64_t boottime_ns(void)
 {
     struct timespec ts;
@@ -39,7 +35,6 @@ static uint64_t boottime_ns(void)
     return ts_ns(ts);
 }
 
-// sleep until an absolute CLOCK_BOOTTIME time
 static void sleep_until(uint64_t t)
 {
     struct timespec ts = {.tv_sec = (time_t)(t / 1000000000ull), .tv_nsec = (long)(t % 1000000000ull)};
@@ -47,14 +42,12 @@ static void sleep_until(uint64_t t)
         ;
 }
 
-// print the errno message and exit 2
 static void die(const char *what)
 {
     fprintf(stderr, "cpu_load: %s: %s\n", what, strerror(errno));
     exit(2);
 }
 
-// run a cpu at duty percent of every slot, recording each window
 static void *spin(void *v)
 {
     struct cpu_load *h = v;
@@ -83,7 +76,7 @@ static void *spin(void *v)
             h->win[2 * h->n + 1] = b;
             h->n++;
         } else {
-            fprintf(stderr, "cpu_load: cpu %d ran out of window slots at %zu\n", h->cpu, h->n);
+            fprintf(stderr, "cpu_load: cpu %d slots full at %zu\n", h->cpu, h->n);
             exit(2);
         }
     }
@@ -94,7 +87,6 @@ static void *spin(void *v)
     return NULL;
 }
 
-// print usage and exit 2
 static void usage(void)
 {
     fprintf(stderr, "usage: cpu_load --cpus N[,N...] --log PATH [--duration-s N] [--duty PCT] "
@@ -102,7 +94,6 @@ static void usage(void)
     exit(2);
 }
 
-// parse a flag's integer value, at least lo
 static long num(const char *flag, const char *s, long lo)
 {
     char *end;
@@ -115,7 +106,6 @@ static long num(const char *flag, const char *s, long lo)
     return v;
 }
 
-// parse flags, run the spinners and write their windows to the log
 int main(int argc, char **argv)
 {
     const char *cpus = NULL, *logpath = NULL;
@@ -145,7 +135,7 @@ int main(int argc, char **argv)
         die("strdup");
     for (char *t = strtok(list, ","); t; t = strtok(NULL, ",")) {
         if (n == MAX_CPUS) {
-            fprintf(stderr, "cpu_load: more than %d cpus\n", MAX_CPUS);
+            fprintf(stderr, "cpu_load: cpus > %d\n", MAX_CPUS);
             return 2;
         }
         memset(&hs[n], 0, sizeof(hs[n]));

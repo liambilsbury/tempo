@@ -1,22 +1,16 @@
 #!/usr/bin/env python3
-"""Split and score R6's adaptive-rs batches at the frozen R5 and R4b duties
-
-Usage: benchmark/score/single_level/r6.py --duty nested|single
-       benchmark/score/single_level/r6.py --split BATCH nested|single adaptive-rs|adaptive OUT [--prefix P]
-       benchmark/score/single_level/r6.py --ratio nested|single adaptive-rs|adaptive ARRIVED
-       benchmark/score/single_level/r6.py --vs-fixed-hi nested|single adaptive-rs|adaptive ARRIVED
-       benchmark/score/single_level/r6.py --verdict nested|single SCORE
-       benchmark/score/single_level/r6.py --selftest
-  --duty          a level's frozen duty
-  --split         the rounds that show arrival
-  --ratio         the arm's ratio to fixed-hi-probe
-  --vs-fixed-hi   the arm against fixed-hi
-  --verdict       the level's verdict"""
 import json
 import re
 import sys
 from pathlib import Path
 from statistics import median
+
+USAGE = """Usage: benchmark/score/single_level/r6.py --duty nested|single
+       benchmark/score/single_level/r6.py --split BATCH nested|single adaptive-rs|adaptive OUT [--prefix P]
+       benchmark/score/single_level/r6.py --ratio nested|single adaptive-rs|adaptive ARRIVED
+       benchmark/score/single_level/r6.py --vs-fixed-hi nested|single adaptive-rs|adaptive ARRIVED
+       benchmark/score/single_level/r6.py --verdict nested|single SCORE
+       benchmark/score/single_level/r6.py --selftest"""
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
@@ -35,7 +29,6 @@ ARMS = ("adaptive-rs", "adaptive")
 
 
 def duty(level, frozen=None):
-    """return a level's duty from its frozen selection, or None"""
     L = LEVELS[level]
     try:
         t = json.loads((Path(frozen) / L["source"] if frozen else lib.single_level_file(L["source"])).read_text())["selection_text"]
@@ -48,7 +41,6 @@ def duty(level, frozen=None):
 
 
 def split(d, level, arm, prefix=""):
-    """apply R4's arrival rule with the arm in the adaptive slot"""
     L = LEVELS[level]
     rounds = []
     for r in d.get("rounds", []):
@@ -69,15 +61,13 @@ def split(d, level, arm, prefix=""):
 
 
 def ratio_lines(level, arm, rounds):
-    """return the guard lines and the arm's ratio line to fixed-hi-probe"""
     from benchmark.score.nested.quality_shedding import arm_median
     tag = f"{LEVELS[level]['name']} {arm}"
     kept = [r for r in rounds if isinstance(r, dict) and r4_select.hit_ok(r)]
     out = [g.replace("guard ", f"{tag} guard ", 1) for g in r4_select.guards(kept)]
     ad = arm_median(kept, "adaptive", "over_deadline_frac") if kept else None
     pr = arm_median(kept, "fixed-hi-probe", "over_deadline_frac") if kept else None
-    what = "pre-registered: at most %s; scored by hand" % r4_select.RATIO_MAX if arm == "adaptive-rs" \
-        else "re-measured, reported, not a prediction"
+    what = "pre-registered <= %s" % r4_select.RATIO_MAX if arm == "adaptive-rs" else "not a prediction"
     if ad is None or pr is None or not pr:
         out.append(f"{tag} ratio / fixed-hi-probe over_deadline_frac: - ({len(kept)} kept round(s); "
                    f"medians {ad} / {pr})")
@@ -88,39 +78,35 @@ def ratio_lines(level, arm, rounds):
 
 
 def vs_fixed_hi(level, arm, rounds):
-    """return the arm's median ratio and sign test line against fixed-hi"""
     from benchmark.run.paired import sign_test
     tag = f"{LEVELS[level]['name']} {arm}"
     pairs = [(r["adaptive"]["over_deadline_frac"], r["fixed-hi"]["over_deadline_frac"]) for r in rounds
              if isinstance(r, dict) and r4_select.num((r.get("adaptive") or {}).get("over_deadline_frac"))
              and r4_select.num((r.get("fixed-hi") or {}).get("over_deadline_frac"))]
     if not pairs:
-        return [f"reported, not scored: {tag} against fixed-hi: no paired rounds"]
+        return [f"reported, not scored: {tag} vs fixed-hi: no pairs"]
     diffs = [a - b for a, b in pairs]
     p, _, _ = sign_test(diffs)
     rat = [a / b for a, b in pairs if b]
-    return [f"reported, not scored: {tag} against fixed-hi (no instrument): median per-round ratio "
-            f"{median(rat):.4g} over {len(rat)} round(s), {sum(x > 0 for x in diffs)} up / "
-            f"{sum(x < 0 for x in diffs)} down, sign test p={p:.4g}" if rat else
-            f"reported, not scored: {tag} against fixed-hi: fixed-hi missed nothing"]
+    return [f"reported, not scored: {tag} vs fixed-hi: ratio "
+            f"{median(rat):.4g} n={len(rat)}, {sum(x > 0 for x in diffs)} up / "
+            f"{sum(x < 0 for x in diffs)} down, sign p={p:.4g}" if rat else
+            f"reported, not scored: {tag} vs fixed-hi: fixed-hi 0"]
 
 
 def verdict(level, text):
-    """return a level's verdict lines from its adaptive-rs score text"""
     tag = LEVELS[level]["name"]
     p6 = re.search(r"^verdicts .*P6=(\w+)", text or "", re.M)
     rt = re.search(rf"^{tag} adaptive-rs ratio .*= ([0-9.eE+-]+) over", text or "", re.M)
-    want = ("adaptive-rs's P6 HIT and its ratio at most %s (R6's prediction)" if level == "nested"
-            else "adaptive-rs keeps R4b's result: P6 HIT and its ratio at most %s") % r4_select.RATIO_MAX
+    want = "adaptive-rs P6 HIT, ratio <= %s" % r4_select.RATIO_MAX
     if not p6 or not rt:
-        return [f"{tag}: {want}? not applicable (VOID, not run or not scored)", f"{tag} verdict: NOT APPLICABLE"]
+        return [f"{tag}: no P6/ratio", f"{tag} verdict: NOT APPLICABLE"]
     r = float(rt.group(1))
     hit = p6.group(1) == "HIT" and r <= r4_select.RATIO_MAX
     return [f"{tag}: {want}? P6={p6.group(1)}, ratio {r:.6g}", f"{tag} verdict: {'HIT' if hit else 'MISS'}"]
 
 
 def _batch(level, n=16, low=(), od=0.3, rs_od=0.01, prefix=""):
-    """build a level's batch with chosen low-steal rounds"""
     L = LEVELS[level]
     rs = []
     for i in range(n):
@@ -136,54 +122,52 @@ def _batch(level, n=16, low=(), od=0.3, rs_od=0.01, prefix=""):
 
 
 def selftest():
-    """run the rule cases and return 1 on any failure"""
     import tempfile
     cases = []
-    cases.append(("the nested duty is R5's recorded selection (10)", duty("nested") == "10"))
-    cases.append(("the single-level duty is R4b's recorded load A (43)", duty("single") == "43"))
+    cases.append(("duty(nested)=10", duty("nested") == "10"))
+    cases.append(("duty(single)=43", duty("single") == "43"))
     with tempfile.TemporaryDirectory() as td:
         Path(td, "pcn-r5-pilot.json").write_text(json.dumps({"selection_text": "one_round_forced=1\nselected_duty=5\n"}))
-        cases.append(("a forced or missing record gives no duty", duty("nested", td) is None and duty("single", td) is None))
+        cases.append(("one_round_forced=1 / missing: duty None", duty("nested", td) is None and duty("single", td) is None))
         for m in lib.old_names("one_round_forced"):
             Path(td, "pcn-r5-pilot.json").write_text(json.dumps({"selection_text": f"{m}=1\nselected_duty=5\n"}))
-            cases.append((f"a record forced under the old marker {m} gives no duty", duty("nested", td) is None))
+            cases.append((f"{m}=1: duty None", duty("nested", td) is None))
     for level in LEVELS:
         lines, kept, void = split(_batch(level), level, "adaptive-rs")
-        cases.append((f"{level}: adaptive-rs fills the adaptive slot, 16 kept",
+        cases.append((f"{level} split adaptive-rs: kept 16, adaptive=0.01",
                       len(kept) == 16 and not void and kept[0]["adaptive"]["over_deadline_frac"] == 0.01
                       and set(kept[0]) == {"fixed-hi", "fixed-hi-probe", "adaptive", "fixed-lo", "pc-r4-control"}))
         _, kept_old, _ = split(_batch(level), level, "adaptive")
-        cases.append((f"{level}: the old adaptive fills it in the reported split, same rounds",
+        cases.append((f"{level} split adaptive: kept 16, adaptive=0.27",
                       len(kept_old) == 16 and abs(kept_old[0]["adaptive"]["over_deadline_frac"] - 0.27) < 1e-9))
         lines, kept, void = split(_batch(level, low=range(5)), level, "adaptive-rs")
-        cases.append((f"{level}: 11 of 16 arriving is VOID, named", void and any(f"{LEVELS[level]['name']} adaptive-rs: VOID" in x for x in lines)))
+        cases.append((f"{level} low steal x5: adaptive-rs VOID", void and any(f"{LEVELS[level]['name']} adaptive-rs: VOID" in x for x in lines)))
         rl = ratio_lines(level, "adaptive-rs", split(_batch(level), level, "adaptive-rs")[1])
-        cases.append((f"{level}: adaptive-rs's ratio is the pre-registered one, with R4's guards",
+        cases.append((f"{level} adaptive-rs ratio: 0.0333333 over 16, pre-registered, guard P6",
                       any("adaptive-rs ratio" in x and "= 0.0333333 over 16" in x and "pre-registered" in x for x in rl)
                       and any("adaptive-rs guard P6" in x for x in rl)))
         ro = ratio_lines(level, "adaptive", split(_batch(level), level, "adaptive")[1])
-        cases.append((f"{level}: the old arm's ratio is reported, not a prediction", any("not a prediction" in x for x in ro)))
+        cases.append((f"{level} adaptive ratio: 'not a prediction'", any("not a prediction" in x for x in ro)))
         vf = vs_fixed_hi(level, "adaptive-rs", split(_batch(level), level, "adaptive-rs")[1])
-        cases.append((f"{level}: against fixed-hi is reported, not scored", vf[0].startswith("reported, not scored") and "0 up / 16 down" in vf[0]))
+        cases.append((f"{level} vs_fixed_hi: 'reported, not scored', 0 up / 16 down", vf[0].startswith("reported, not scored") and "0 up / 16 down" in vf[0]))
         name = LEVELS[level]["name"]
         good = f"verdicts  P5=MISS  P6=HIT  P7=HIT  P8=HIT\n{name} adaptive-rs ratio / fixed-hi-probe over_deadline_frac: 0.01 / 0.3 = 0.0333333 over 16 kept round(s)"
-        cases.append((f"{level}: verdict HIT when P6 HIT and ratio at most 0.5", verdict(level, good)[-1].endswith("HIT")))
-        cases.append((f"{level}: verdict MISS when P6 misses", verdict(level, good.replace("P6=HIT", "P6=MISS"))[-1].endswith("MISS")))
-        cases.append((f"{level}: verdict MISS when the ratio is above 0.5", verdict(level, good.replace("= 0.0333333", "= 0.6"))[-1].endswith("MISS")))
-        cases.append((f"{level}: not applicable without a score", verdict(level, "")[-1].endswith("NOT APPLICABLE")))
-        cases.append((f"{level}: the old arm's ratio line is not read as adaptive-rs's",
+        cases.append((f"{level} P6 HIT, ratio=0.033: HIT", verdict(level, good)[-1].endswith("HIT")))
+        cases.append((f"{level} P6=MISS: MISS", verdict(level, good.replace("P6=HIT", "P6=MISS"))[-1].endswith("MISS")))
+        cases.append((f"{level} ratio=0.6: MISS", verdict(level, good.replace("= 0.0333333", "= 0.6"))[-1].endswith("MISS")))
+        cases.append((f"{level} empty score: NOT APPLICABLE", verdict(level, "")[-1].endswith("NOT APPLICABLE")))
+        cases.append((f"{level} adaptive ratio line only: NOT APPLICABLE",
                       verdict(level, good.replace("adaptive-rs ratio", "adaptive ratio"))[-1].endswith("NOT APPLICABLE")))
     lines, kept, void = split(_batch("nested", n=1, prefix="one-round-"), "nested", "adaptive-rs", "one-round-")
-    cases.append(("a one-round run's batch splits through its prefix", len(kept) == 1))
+    cases.append(("prefix one-round- n=1: kept 1", len(kept) == 1))
     bad = [c for c, ok in cases if not ok]
     for c, ok in cases:
         print(("ok   " if ok else "FAIL ") + c)
-    print(f"r6_select selftest: {len(cases) - len(bad)}/{len(cases)}")
+    print(f"selftest {len(cases) - len(bad)}/{len(cases)}")
     return 1 if bad else 0
 
 
 def main(argv):
-    """parse the arguments and run a mode"""
     if argv == ["--selftest"]:
         return selftest()
     prefix = ""
@@ -194,7 +178,7 @@ def main(argv):
     if len(argv) == 2 and argv[0] == "--duty" and argv[1] in LEVELS:
         d = duty(argv[1])
         if d is None:
-            print(f"r6_select: no {argv[1]} duty in the frozen record", file=sys.stderr)
+            print(f"r6_select: no {argv[1]} duty", file=sys.stderr)
             return 1
         print(d)
         return 0
@@ -202,7 +186,7 @@ def main(argv):
         try:
             d = json.loads(Path(argv[1]).read_text())
         except (OSError, ValueError) as e:
-            print(f"r6_select: cannot read {argv[1]} ({e})", file=sys.stderr)
+            print(f"r6_select: {argv[1]}: {e}", file=sys.stderr)
             return 1
         lines, kept, void = split(d, argv[2], argv[3], prefix)
         print("\n".join(lines))
@@ -224,7 +208,7 @@ def main(argv):
             t = ""
         print("\n".join(verdict(argv[1], t)))
         return 0
-    print(__doc__.split("\n\n")[1], file=sys.stderr)
+    print(USAGE, file=sys.stderr)
     return 2
 
 

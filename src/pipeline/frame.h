@@ -1,4 +1,3 @@
-// define the frame header carried through every pipeline hop
 #ifndef TEMPO_FRAME_H
 #define TEMPO_FRAME_H
 
@@ -11,7 +10,6 @@
 #define APSIS_CLOCK      CLOCK_MONOTONIC_RAW
 #define APSIS_CLOCK_JOIN CLOCK_MONOTONIC
 
-// frame header with per-stage timestamps in ns
 struct frame_hdr {
     uint64_t seq;
     uint64_t t_sensor;
@@ -27,9 +25,8 @@ struct frame_hdr {
 };
 
 _Static_assert(HDR_FLOATS * sizeof(float) >= sizeof(struct frame_hdr),
-               "HDR_FLOATS does not reserve enough floats for struct frame_hdr");
+               "HDR_FLOATS too small");
 
-// return the latency clock in ns
 static inline uint64_t now_ns(void)
 {
     struct timespec ts;
@@ -37,7 +34,6 @@ static inline uint64_t now_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-// return the join clock in ns
 static inline uint64_t now_ns_join(void)
 {
     struct timespec ts;
@@ -45,13 +41,11 @@ static inline uint64_t now_ns_join(void)
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-// copy a header into a stream buffer
 static inline void hdr_put(float *buf, const struct frame_hdr *h)
 {
     memcpy(buf, h, sizeof(*h));
 }
 
-// copy a header out of a stream buffer
 static inline void hdr_get(const float *buf, struct frame_hdr *h)
 {
     memcpy(h, buf, sizeof(*h));

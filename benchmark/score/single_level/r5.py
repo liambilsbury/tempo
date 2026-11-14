@@ -1,24 +1,16 @@
 #!/usr/bin/env python3
-"""Apply R5's nested pilot selection and score its batch against R4b's load A
-
-Usage: benchmark/score/single_level/r5.py --select PILOT [--record FILE] [--prefix P] [--one-round-fallback]
-       benchmark/score/single_level/r5.py --grid
-       benchmark/score/single_level/r5.py --split BATCH OUT [--prefix P]
-       benchmark/score/single_level/r5.py --ratio ARRIVED
-       benchmark/score/single_level/r5.py --cross-level R5_SCORE [R4B_FROZEN]
-       benchmark/score/single_level/r5.py --selftest
-  --select PILOT        select the duty from the pilot
-  --record FILE         record the selection
-  --one-round-fallback  lowest duty when none qualifies
-  --grid                the grid's duties and labels
-  --split               the rounds that show arrival
-  --ratio               adaptive / fixed-hi-probe ratio
-  --cross-level         verdict against R4b's load A"""
 import json
 import re
 import sys
 from pathlib import Path
 from statistics import median
+
+USAGE = """Usage: benchmark/score/single_level/r5.py --select PILOT [--record FILE] [--prefix P] [--one-round-fallback]
+       benchmark/score/single_level/r5.py --grid
+       benchmark/score/single_level/r5.py --split BATCH OUT [--prefix P]
+       benchmark/score/single_level/r5.py --ratio ARRIVED
+       benchmark/score/single_level/r5.py --cross-level R5_SCORE [R4B_FROZEN]
+       benchmark/score/single_level/r5.py --selftest"""
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
@@ -36,17 +28,14 @@ R4B_FROZEN = ROOT / "results" / "single_level" / "r4b" / "pc-r4b.json"
 
 
 def dtxt(d):
-    """format a duty without a trailing .0"""
     return f"{d:g}"
 
 
 def pilot_arm(d):
-    """return the pilot label of a duty"""
     return "pcn-r5p-d" + dtxt(d).replace(".", "p")
 
 
 def duty_stats(d, dd, prefix=""):
-    """return a duty's pilot medians, drops and arrival counts"""
     rounds = [r if isinstance(r, dict) else {} for r in d.get("rounds", [])]
     arm, ctl = prefix + pilot_arm(dd), prefix + PILOT_CONTROL
     vals = [r[arm]["over_deadline_frac"] for r in rounds
@@ -60,7 +49,6 @@ def duty_stats(d, dd, prefix=""):
 
 
 def select(d, prefix=""):
-    """return the report lines, the selected duty or None, and the reason for none"""
     n = len(d.get("rounds", []))
     k = need(n, KEEP)
     lines = [f"pilot: {n} round(s) attempted; a duty needs results in at least {k}",
@@ -74,7 +62,6 @@ def select(d, prefix=""):
     stats = {dd: duty_stats(d, dd, prefix) for dd in GRID}
 
     def neighbour_ok(dd):
-        """check that the next grid duty's median is at or above the band"""
         i = GRID.index(dd)
         if i + 1 >= len(GRID):
             return False
@@ -119,12 +106,11 @@ def select(d, prefix=""):
 
 
 def selection_text(d, prefix="", one_round_fallback=False):
-    """return the selection text and the selected duty"""
     lines, a, reason = select(d, prefix)
     out = list(lines)
     if a is None and one_round_fallback and prefix:
-        out += [f"ONE-ROUND: the rule selected none ({reason}); the grid's lowest duty is forced so the "
-                f"batch runs", "one_round_forced=1"]
+        out += [f"ONE-ROUND: the rule selected none ({reason}); the grid's lowest duty is forced",
+                "one_round_forced=1"]
         a, reason = GRID[0], None
     if reason:
         out.append(reason)
@@ -133,26 +119,24 @@ def selection_text(d, prefix="", one_round_fallback=False):
 
 
 def record(path, text):
-    """write the selection once, or compare it with an existing one"""
     import subprocess
     p = Path(path)
     body = [x for x in text.splitlines() if not x.startswith("selected at ")]
     if p.exists():
         old = [x for x in p.read_text().splitlines() if not x.startswith("selected at ")]
         if old != body:
-            print(f"r5_select: refusing -- the selection at {p} does not match the rule re-applied to the pilot", file=sys.stderr)
+            print(f"r5_select: refusing -- {p} differs", file=sys.stderr)
             return 3
-        print(f"r5_select: the selection recorded at {p} matches the rule re-applied; not rewritten")
+        print(f"r5_select: {p} matches")
         return 0
     sha = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
                          capture_output=True, text=True).stdout.strip() or "-"
     p.write_text(f"selected at {sha}\n" + "\n".join(body) + "\n")
-    print(f"r5_select: selection recorded at {p}")
+    print(f"r5_select: recorded {p}")
     return 0
 
 
 def split(d, prefix=""):
-    """apply R4's arrival rule to the batch's rounds under R4's labels"""
     rounds = []
     for r in d.get("rounds", []):
         r = r if isinstance(r, dict) else {}
@@ -166,7 +150,6 @@ def split(d, prefix=""):
 
 
 def ratio_lines(rounds):
-    """return the guard lines and the adaptive / fixed-hi-probe ratio line"""
     from benchmark.score.nested.quality_shedding import arm_median
     kept = [r for r in rounds if isinstance(r, dict) and r4_select.hit_ok(r)]
     out = list(r4_select.guards(kept))
@@ -177,20 +160,17 @@ def ratio_lines(rounds):
                    f"round(s); medians {ad} / {pr})")
     else:
         out.append(f"R5 ratio adaptive / fixed-hi-probe over_deadline_frac: {ad} / {pr} = {ad / pr:.6g} "
-                   f"over {len(kept)} kept round(s) (pre-registered: at most {r4_select.RATIO_MAX}; "
-                   f"scored by hand)")
+                   f"over {len(kept)} kept round(s)")
     return out
 
 
 def _level(text, ratio_re):
-    """return the P6 verdict and ratio read from a score text"""
     p6 = re.search(r"^verdicts .*P6=(\w+)", text or "", re.M)
     rt = re.search(ratio_re, text or "", re.M)
     return (p6.group(1) if p6 else None, float(rt.group(1)) if rt else None)
 
 
 def r4b_load_a(frozen=None):
-    """return the P6 verdict and ratio of R4b's frozen load A"""
     try:
         t = json.loads(Path(frozen or R4B_FROZEN).read_text()).get("score_text", "")
     except (OSError, ValueError):
@@ -200,23 +180,21 @@ def r4b_load_a(frozen=None):
 
 
 def cross_level(r5_text, frozen=None):
-    """return the cross-level statement lines for R5 against R4b's load A"""
     single = r4b_load_a(frozen)
     nested = _level(r5_text, r"^R5 ratio .*= ([0-9.eE+-]+) over")
-    detail = (f"single-level (R4b load A, frozen) P6={single[0]}, ratio "
-              f"{'-' if single[1] is None else f'{single[1]:.6g}'}; nested (R5) P6={nested[0]}, ratio "
+    detail = (f"single-level P6={single[0]}, ratio "
+              f"{'-' if single[1] is None else f'{single[1]:.6g}'}; nested P6={nested[0]}, ratio "
               f"{'-' if nested[1] is None else f'{nested[1]:.6g}'}")
     if None in single or None in nested:
         missing = [n for n, v in (("single-level", single), ("nested", nested)) if None in v]
-        return [f"cross-level: not applicable -- {' and '.join(missing)} has no P6 verdict and ratio "
-                f"(VOID, not run or not found); {detail}", "cross-level verdict: NOT APPLICABLE"]
+        return [f"cross-level: no P6/ratio, {' and '.join(missing)}; {detail}",
+                "cross-level verdict: NOT APPLICABLE"]
     hit = all(p6 == "HIT" and r <= r4_select.RATIO_MAX for p6, r in (single, nested))
-    return [f"cross-level: P6 HIT and the ratio at most {r4_select.RATIO_MAX} at both levels? {detail}",
+    return [f"cross-level: P6 HIT, ratio <= {r4_select.RATIO_MAX}? {detail}",
             f"cross-level verdict: {'HIT' if hit else 'MISS'}"]
 
 
 def _pilot(med, drops=None, steal=None, rounds=5, prefix=""):
-    """build a pilot batch from per-duty over_deadline_frac, drops and steal"""
     rs = []
     for i in range(rounds):
         r = {PILOT_CONTROL: {"frames": 20000, "steal_ticks": 40, "over_deadline_frac": 0.002, "dropped": 9}}
@@ -228,7 +206,6 @@ def _pilot(med, drops=None, steal=None, rounds=5, prefix=""):
 
 
 def _batch(n=16, low=(), od=0.3, prefix=""):
-    """build a confirmatory batch with chosen low-steal rounds"""
     rs = []
     for i in range(n):
         arm = lambda o, s, hit=5: {"frames": 20000, "steal_ticks": s, "over_deadline_frac": o, "hit": hit,  # noqa: E731
@@ -242,52 +219,50 @@ def _batch(n=16, low=(), od=0.3, prefix=""):
 
 
 def selftest():
-    """run the rule cases and return 1 on any failure"""
     import tempfile
     cases = []
     sel = lambda *a, **k: select(*a, **k)[1]           # noqa: E731
     curve = {d: (0.002 if d < 30 else 0.05 if d < 33 else 0.3 if d < 36 else 0.42) for d in GRID}
     base = {d: [v] * 5 for d, v in curve.items()}
-    cases.append(("the grid brackets the edge below the levels comparison's saturated L2 (42.1): 5 to 42, steps of 1 "
-                  "from 20", GRID[0] == 5 and GRID[-1] == 42 < 42.1 and all(b - a == 1 for a, b in zip(GRID[3:], GRID[4:]))))
-    cases.append(("R4's rule: the lowest duty in [0.20, 0.80] with arrival", sel(_pilot(base)) == 33))
-    cases.append(("a duty with results in 3 of 5 rounds does not count",
+    cases.append(("GRID 5..42 < 42.1, step 1 from 20", GRID[0] == 5 and GRID[-1] == 42 < 42.1 and all(b - a == 1 for a, b in zip(GRID[3:], GRID[4:]))))
+    cases.append(("base: selected 33", sel(_pilot(base)) == 33))
+    cases.append(("d33 results 3/5: selected 34",
                   sel(_pilot({**base, 33: [0.3, 0.3, 0.3, None, None]})) == 34))
-    cases.append(("a steal tie in one round skips the duty", sel(_pilot(base, steal={33: [600, 40, 600, 600, 600]})) == 34))
+    cases.append(("d33 steal tie r1: selected 34", sel(_pilot(base, steal={33: [600, 40, 600, 600, 600]})) == 34))
     spike = {**base, 25: [0.25] * 5, 26: [0.05] * 5}
-    cases.append(("an isolated duty in the band with its neighbour above below 0.20 is skipped (R4b)",
+    cases.append(("d25 neighbour<0.20: selected 33",
                   sel(_pilot(spike)) == 33))
     top = {d: [0.01] * 5 for d in GRID}
     top[GRID[-1]] = [0.3] * 5
     got = select(_pilot(top))
-    cases.append(("the top of the grid is never selected", got[1] is None and "neighbour" in got[2]))
+    cases.append(("only GRID[-1] in band: none, 'neighbour'", got[1] is None and "neighbour" in got[2]))
     got = select(_pilot({d: [0.01] * 5 for d in GRID}))
-    cases.append(("none in the band: not run, the reason says so", got[1] is None and "no duty in the grid" in got[2]))
+    cases.append(("all 0.01: none, 'no duty in the grid'", got[1] is None and "no duty in the grid" in got[2]))
     got = select(_pilot(base, steal={d: [40] * 5 for d in GRID}))
-    cases.append(("in the band but steal never above the control: not run, the arrival reason",
+    cases.append(("steal<=control: none, 'steal did not confirm arrival'",
                   got[1] is None and "steal did not confirm arrival" in got[2]))
-    cases.append(("the plateau with drops is still R4's band (no drop cap; disclosed)",
+    cases.append(("dropped=3977 all: selected 38",
                   sel(_pilot({d: [0.002 if d < 38 else 0.41] * 5 for d in GRID}, drops={d: 3977 for d in GRID})) == 38))
     t, a = selection_text(_pilot({d: [0.01] for d in GRID}, rounds=1, prefix="one-round-"), "one-round-", True)
-    cases.append(("a one-round run's none forces the lowest duty, marked", a == 5 and "one_round_forced=1" in t and t.endswith("selected_duty=5\n")))
+    cases.append(("one-round none: one_round_forced=1, selected_duty=5", a == 5 and "one_round_forced=1" in t and t.endswith("selected_duty=5\n")))
     t, a = selection_text(_pilot(base))
-    cases.append(("the record ends with the one selection", a == 33 and t.endswith("selected_duty=33\n") and "load B" not in t))
-    cases.append(("pilot labels are nested and R5's own", pilot_arm(20) == "pcn-r5p-d20" and PILOT_CONTROL.startswith("pcn-r5p")))
+    cases.append(("record tail: selected_duty=33, no load B", a == 33 and t.endswith("selected_duty=33\n") and "load B" not in t))
+    cases.append(("pilot_arm(20)=pcn-r5p-d20, PILOT_CONTROL pcn-r5p*", pilot_arm(20) == "pcn-r5p-d20" and PILOT_CONTROL.startswith("pcn-r5p")))
     with tempfile.TemporaryDirectory() as td:
         rec = Path(td) / "s.selection"
-        cases.append(("recorded once; re-applied it only compares; a mismatch refuses (3)",
+        cases.append(("record new/match/mismatch: rc 0/0/3, file unchanged",
                       record(rec, t) == 0 and record(rec, t) == 0
                       and record(rec, t.replace("selected_duty=33", "selected_duty=34")) == 3
                       and rec.read_text().endswith("selected_duty=33\n")))
     lines, kept, void = split(_batch())
-    cases.append(("split keeps the rounds by R4's arrival rule against R5's control",
+    cases.append(("split: kept 16, not VOID, 5 arms",
                   len(kept) == 16 and not void and set(kept[0]) == {"fixed-hi", "fixed-hi-probe", "adaptive", "fixed-lo", "pc-r4-control"}))
     lines, kept, void = split(_batch(low=range(5)))
-    cases.append(("11 of 16 arriving is VOID, named R5", void and len(kept) == 11 and any("R5: VOID" in x for x in lines)))
+    cases.append(("low steal x5: kept 11, 'R5: VOID'", void and len(kept) == 11 and any("R5: VOID" in x for x in lines)))
     lines, kept, void = split(_batch(prefix="one-round-", n=1), "one-round-")
-    cases.append(("a one-round run's batch splits through its prefix", len(kept) == 1))
+    cases.append(("prefix one-round- n=1: kept 1", len(kept) == 1))
     rl = ratio_lines(split(_batch())[1])
-    cases.append(("the ratio with R4's guards", any(x.startswith("R5 ratio") and "= 0.00333333 over 16" in x for x in rl)
+    cases.append(("ratio_lines: 0.00333333 over 16, guard P6, guard P7/P8", any(x.startswith("R5 ratio") and "= 0.00333333 over 16" in x for x in rl)
                   and any(x.startswith("guard P6") for x in rl) and any(x.startswith("guard P7/P8") for x in rl)))
     r5 = "verdicts  P5=MISS  P6=HIT  P7=MISS  P8=HIT\nR5 ratio adaptive / fixed-hi-probe over_deadline_frac: 0.001 / 0.3 = 0.00333333 over 16 kept round(s)"
     with tempfile.TemporaryDirectory() as td:
@@ -296,28 +271,27 @@ def selftest():
                                   "R4b load A ratio adaptive / fixed-hi-probe over_deadline_frac: 0.00055 / 0.2665 = 0.00206406 over 16 kept round(s)\n"
                                   "load B: arrival\nverdicts  P5=MISS  P6=MISS  P7=HIT  P8=HIT\n"
                                   "R4b load B ratio adaptive / fixed-hi-probe over_deadline_frac: 0.6 / 1 = 0.6 over 16 kept round(s)\n"}))
-        cases.append(("R4b's load A is read from its frozen score, not load B", r4b_load_a(fz) == ("HIT", 0.00206406)))
-        cases.append(("cross-level HIT when P6 HIT and the ratio at most 0.5 at both levels",
+        cases.append(("r4b_load_a(frozen): (HIT, 0.00206406)", r4b_load_a(fz) == ("HIT", 0.00206406)))
+        cases.append(("P6 HIT, ratio<=0.5 both: cross-level HIT",
                       cross_level(r5, fz)[-1] == "cross-level verdict: HIT"))
-        cases.append(("cross-level MISS when the nested P6 misses",
+        cases.append(("nested P6=MISS: cross-level MISS",
                       cross_level(r5.replace("P6=HIT", "P6=MISS"), fz)[-1] == "cross-level verdict: MISS"))
-        cases.append(("cross-level MISS when the nested ratio is above 0.5",
+        cases.append(("nested ratio=0.6: cross-level MISS",
                       cross_level(r5.replace("= 0.00333333", "= 0.6"), fz)[-1] == "cross-level verdict: MISS"))
-        cases.append(("cross-level not applicable when R5 is VOID or not run",
+        cases.append(("R5 empty: cross-level NOT APPLICABLE",
                       cross_level("", fz)[-1] == "cross-level verdict: NOT APPLICABLE"))
-        cases.append(("cross-level not applicable when the frozen R4b cannot be read",
+        cases.append(("R4b absent: cross-level NOT APPLICABLE",
                       cross_level(r5, Path(td) / "absent.json")[-1] == "cross-level verdict: NOT APPLICABLE"))
-    cases.append(("the committed R4b load A reads P6 HIT, ratio 0.00206406",
+    cases.append(("r4b_load_a() committed: (HIT, 0.00206406)",
                   r4b_load_a() == ("HIT", 0.00206406)))
     bad = [c for c, ok in cases if not ok]
     for c, ok in cases:
         print(("ok   " if ok else "FAIL ") + c)
-    print(f"r5_select selftest: {len(cases) - len(bad)}/{len(cases)}")
+    print(f"selftest {len(cases) - len(bad)}/{len(cases)}")
     return 1 if bad else 0
 
 
 def main(argv=None):
-    """parse the arguments and run a mode"""
     argv = sys.argv[1:] if argv is None else argv
     if "--selftest" in argv:
         return selftest()
@@ -330,7 +304,7 @@ def main(argv=None):
         try:
             d = json.loads(Path(argv[1]).read_text())
         except (OSError, ValueError) as e:
-            print(f"r5_select: cannot read {argv[1]} ({e})", file=sys.stderr)
+            print(f"r5_select: {argv[1]}: {e}", file=sys.stderr)
             return 1
     if argv[:1] == ["--select"] and len(argv) >= 2:
         text, _ = selection_text(d, prefix, "--one-round-fallback" in argv)
@@ -354,7 +328,7 @@ def main(argv=None):
             t = ""
         print("\n".join(cross_level(t, argv[2] if len(argv) >= 3 else None)))
         return 0
-    print(__doc__.split("\n\n")[1], file=sys.stderr)
+    print(USAGE, file=sys.stderr)
     return 2
 
 

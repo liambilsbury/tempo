@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Attribute each late frame to the L1 events inside its window"""
-
 import argparse
 import struct
 import sys
@@ -14,17 +12,14 @@ FIELDS = ("seq", "t_sensor", "t_compute_in", "t_compute_out", "t_actuator",
 
 
 def read_frames(path):
-    """read the telemetry records as dicts"""
     raw = Path(path).read_bytes()
     if len(raw) % HDR.size:
-        raise SystemExit(f"{path}: {len(raw)} bytes is not a whole number of "
-                         f"{HDR.size}-byte records")
+        raise SystemExit(f"{path}: partial record")
     return [dict(zip(FIELDS, HDR.unpack_from(raw, i)))
             for i in range(0, len(raw), HDR.size)]
 
 
 def read_events(path):
-    """parse the EV lines sorted by time"""
     out = []
     for line in Path(path).read_text(errors="replace").splitlines():
         if not line.startswith("EV "):
@@ -42,20 +37,18 @@ def read_events(path):
 
 
 def in_window(events, lo, hi):
-    """return the sorted events between lo and hi"""
     import bisect
     ts = [e["t"] for e in events]
     return events[bisect.bisect_left(ts, lo):bisect.bisect_right(ts, hi)]
 
 
 def main():
-    """print the attribution of the late frames and the FACT line"""
     ap = argparse.ArgumentParser()
     ap.add_argument("--telemetry", required=True)
     ap.add_argument("--events", required=True)
     ap.add_argument("--deadline-ns", type=int, required=True)
     ap.add_argument("--loop-cpus", default="",
-                    help="comma list of the loop's CPUs")
+                    help="CPU list")
     ap.add_argument("--top", type=int, default=10)
     args = ap.parse_args()
 
@@ -66,7 +59,7 @@ def main():
     if not frames:
         raise SystemExit("no frames")
     if not events:
-        print("no events: the probe produced nothing; every late frame is unattributed", file=sys.stderr)
+        print("no events", file=sys.stderr)
 
     f_lo = min(f["t_sensor_join"] for f in frames)
     f_hi = max(f["t_actuator_join"] for f in frames)
@@ -74,9 +67,8 @@ def main():
         e_lo, e_hi = events[0]["t"], events[-1]["t"]
         overlap = min(f_hi, e_hi) - max(f_lo, e_lo)
         if overlap <= 0:
-            raise SystemExit(
-                f"frames span [{f_lo},{f_hi}] and events span [{e_lo},{e_hi}]; they do not overlap")
-        print(f"join: frames and events overlap for {overlap/1e9:.2f} s")
+            raise SystemExit("no overlap")
+        print(f"overlap {overlap/1e9:.2f} s")
 
     ev_sorted = events
     late = []
@@ -111,13 +103,13 @@ def main():
           f"  ({unattributed/len(late):.3f} of late)" if late else "unattributed      -")
 
     if classes:
-        print("\nevents inside late-frame windows, by class")
+        print("\nlate-window events")
         for k, v in classes.most_common():
             print(f"  {k:10} {v}")
         print(f"\ntop {args.top} callsites")
         for k, v in culprits.most_common(args.top):
             print(f"  {v:8}  {k}")
-        print("\nremote origin cores")
+        print("\nipi origins")
         for k, v in origins.most_common(args.top):
             print(f"  cpu {k:<4} {v}")
 

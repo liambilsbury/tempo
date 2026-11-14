@@ -1,19 +1,4 @@
 #!/usr/bin/env python3
-"""Apply R4's duty selection rule to the pilot and its arrival rule to the batch
-
-Usage: benchmark/score/single_level/r4.py --select PILOT [--record FILE] [--prefix P] [--one-round-fallback]
-       benchmark/score/single_level/r4.py --arrival BATCH OUT [--prefix P]
-       benchmark/score/single_level/r4.py --ratio KEPT
-       benchmark/score/single_level/r4.py --measurement-code preregistrations/r4.txt
-       benchmark/score/single_level/r4.py --keep-r2-runs RESULTS_DIR
-       benchmark/score/single_level/r4.py --selftest
-  --select PILOT        select the duty from the pilot
-  --record FILE         record the selection
-  --one-round-fallback  lowest duty when none qualifies
-  --arrival BATCH OUT   the rounds that show arrival
-  --ratio KEPT          adaptive / fixed-hi-probe ratio
-  --measurement-code    check the measurement code is unchanged
-  --keep-r2-runs        keep R2's duty-20 runs"""
 
 import argparse
 import json
@@ -34,7 +19,6 @@ PILOT_KEEP_FRACTION = 2 / 3
 
 
 def pilot_arm(d):
-    """return the pilot label of a duty"""
     return f"pc-r4p-probe-d{d}"
 
 
@@ -52,17 +36,14 @@ MEASUREMENT_CODE_MARK = "r4-harness:"
 
 
 def need(n, fraction):
-    """return the round count a fraction of n requires, at least 1"""
     return max(1, math.ceil(n * fraction - 1e-9))
 
 
 def num(x):
-    """check that x is an int or float, excluding bool"""
     return isinstance(x, (int, float)) and not isinstance(x, bool)
 
 
 def steal_rate(fact):
-    """return steal_ticks per 1000 frames, or None"""
     if not isinstance(fact, dict):
         return None
     s, f = fact.get("steal_ticks"), fact.get("frames")
@@ -72,13 +53,11 @@ def steal_rate(fact):
 
 
 def above(fact, ctl):
-    """check that an arm's steal rate is strictly above the control's"""
     a, c = steal_rate(fact), steal_rate(ctl)
     return a is not None and c is not None and a > c
 
 
 def load(path):
-    """read a batch JSON with a rounds list, or None"""
     try:
         d = json.loads(Path(path).read_text())
     except (OSError, ValueError):
@@ -87,12 +66,10 @@ def load(path):
 
 
 def fmt(x):
-    """format a number to 4 significant digits, or - for None"""
     return "-" if x is None else f"{x:.4g}"
 
 
 def select(d, prefix="", runs=None):
-    """return the report lines, the selected duty or None, and the reason for none"""
     rounds = [r if isinstance(r, dict) else {} for r in d["rounds"]]
     n = len(rounds)
     k = need(n, PILOT_KEEP_FRACTION)
@@ -153,19 +130,16 @@ def select(d, prefix="", runs=None):
 
 
 def strip(r, prefix):
-    """remove a prefix from a round's labels"""
     if not prefix:
         return dict(r)
     return {(k[len(prefix):] if k.startswith(prefix) else k): v for k, v in r.items()}
 
 
 def hit_ok(r):
-    """check that every arm is present with a non-zero hit"""
     return all(isinstance(r.get(a), dict) and r[a].get("hit") for a in ARMS)
 
 
 def inject_rundelay(runs, label, i):
-    """return the watched vCPUs' run-delay fraction from a run's inject.meta, or None"""
     p = runs / f"{label}-r{i}" / "inject.meta"
     try:
         kv = dict(t.split("=", 1) for t in p.read_text().split() if "=" in t)
@@ -177,7 +151,6 @@ def inject_rundelay(runs, label, i):
 
 
 def arrival(d, prefix="", runs=None):
-    """return the report lines, the rounds that show arrival, and whether the batch is VOID"""
     rounds = [strip(r, prefix) if isinstance(r, dict) else {} for r in d["rounds"]]
     n = len(rounds)
     k = need(n, VOID_FRACTION)
@@ -203,30 +176,26 @@ def arrival(d, prefix="", runs=None):
             kept.append(r)
             both += h
         rates = ", ".join(f"{a} {fmt(steal_rate(r.get(a)))}" for a in ARMS)
-        lines.append(f"round {i}: steal/1000 frames control {fmt(steal_rate(ctl))}; {rates} -> "
-                     f"arrival {'shown' if ok else 'NOT shown'}; hit rule {'passes' if h else 'fails'}")
-    lines.append(f"arrival: {len(kept)}/{n} rounds (fixed-hi and fixed-hi-probe steal_ticks per "
-                 f"1000 frames above the same round's {R4_CONTROL})")
+        lines.append(f"round {i}: steal/1000 control {fmt(steal_rate(ctl))}; {rates} -> "
+                     f"arrival {'shown' if ok else 'NOT shown'}; hit {'ok' if h else 'fails'}")
+    lines.append(f"arrival: {len(kept)}/{n} rounds")
     lines.append("reported, not a rule: " + ", ".join(
-        f"{a} above the control in {rep[a]}/{rep_n[a]}" for a in REPORTED_ARMS))
+        f"{a} above control {rep[a]}/{rep_n[a]}" for a in REPORTED_ARMS))
     if runs is not None:
-        lines.append("reported, not a rule: injector's vCPU run-delay fraction, median " + ", ".join(
+        lines.append("reported, not a rule: run-delay median " + ", ".join(
             f"{a} {fmt(median(rd[a]) if rd[a] else None)} ({len(rd[a])})" for a in ARMS + (R4_CONTROL,)))
-    lines.append(f"kept by both rules (arrival, then benchmark/score/nested/quality_shedding.py's hit rule): "
-                 f"{both}/{n}; at least {k} required")
+    lines.append(f"kept by both rules: {both}/{n}, need {k}")
     void = both < k
     if void:
-        lines.append(f"R4: VOID -- {both} of {n} rounds pass both rules, fewer than {k}; "
-                     f"not scored")
+        lines.append(f"R4: VOID -- {both}/{n} < {k}")
     return lines, kept, void
 
 
 def ratio(path):
-    """print the guards and the adaptive / fixed-hi-probe ratio of a kept batch"""
     from benchmark.score.nested.quality_shedding import arm_median
     d = load(path)
     if d is None:
-        print(f"R4 ratio adaptive / fixed-hi-probe over_deadline_frac: - (no batch at {path})")
+        print(f"R4 ratio adaptive / fixed-hi-probe over_deadline_frac: - (no {path})")
         return 0
     kept = [r for r in d["rounds"] if isinstance(r, dict) and hit_ok(r)]
     for g in guards(kept):
@@ -235,60 +204,50 @@ def ratio(path):
     pr = arm_median(kept, "fixed-hi-probe", "over_deadline_frac") if kept else None
     if ad is None or pr is None or not pr:
         print(f"R4 ratio adaptive / fixed-hi-probe over_deadline_frac: - "
-              f"({len(kept)} kept round(s); medians {ad} / {pr})")
+              f"(kept {len(kept)}; medians {ad} / {pr})")
         return 0
     print(f"R4 ratio adaptive / fixed-hi-probe over_deadline_frac: {ad} / {pr} = {ad / pr:.3f} "
-          f"over {len(kept)} kept round(s) (pre-registered: at most {RATIO_MAX}; scored by hand)")
+          f"kept {len(kept)}")
     return 0
 
 
 def guards(rounds):
-    """return the P7/P8 and P6 guard lines for the kept rounds"""
     from benchmark.score.nested.quality_shedding import arm_median
     pr = arm_median(rounds, "fixed-hi-probe", "over_deadline_frac") if rounds else None
     lo = arm_median(rounds, "fixed-lo", "over_deadline_frac") if rounds else None
     out = []
     if pr is not None and pr >= GUARD_FULL:
-        out.append(f"guard P7/P8: NOT INFORMATIVE -- fixed-hi-probe median over_deadline_frac {pr} "
-                   f">= {GUARD_FULL}: a full-quality frame cannot fit at this duty; P7 and P8's "
-                   f"first clause are reported as scored")
+        out.append(f"guard P7/P8: NOT INFORMATIVE -- probe od {pr} >= {GUARD_FULL}")
     else:
-        out.append(f"guard P7/P8: not triggered (fixed-hi-probe median over_deadline_frac "
-                   f"{fmt(pr)} < {GUARD_FULL})")
+        out.append(f"guard P7/P8: not triggered (probe od {fmt(pr)} < {GUARD_FULL})")
     if lo is not None and lo >= GUARD_LO:
-        out.append(f"guard P6: NOT INFORMATIVE -- fixed-lo median over_deadline_frac {lo} >= "
-                   f"{GUARD_LO}: even a frame at the cheapest tier cannot fit at this duty; P6's "
-                   f"halving clause and the R4 ratio are reported as scored")
+        out.append(f"guard P6: NOT INFORMATIVE -- fixed-lo od {lo} >= {GUARD_LO}")
     else:
-        out.append(f"guard P6: not triggered (fixed-lo median over_deadline_frac {fmt(lo)} < "
-                   f"{GUARD_LO})")
+        out.append(f"guard P6: not triggered (fixed-lo od {fmt(lo)} < {GUARD_LO})")
     return out
 
 
 def record(path, text):
-    """write the selection once, or compare it with an existing one"""
     p = Path(path)
     body = [ln for ln in text.splitlines() if not ln.startswith("selected at ")]
     if p.exists():
         old = [ln for ln in p.read_text().splitlines() if not ln.startswith("selected at ")]
         if old != body:
-            print(f"r4_select: refusing -- the selection at {p} does not match the rule re-applied to the pilot "
-                  f"(recorded "
+            print(f"r4_select: refusing -- {p} differs (recorded "
                   f"{next((x for x in old if x.startswith('selected_duty=')), 'nothing')}, now "
                   f"{next((x for x in body if x.startswith('selected_duty=')), 'nothing')})", file=sys.stderr)
             return 3
-        print(f"r4_select: the selection recorded at {p} matches the rule re-applied; not rewritten")
+        print(f"r4_select: {p} matches")
         return 0
     import subprocess
     sha = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"],
                          capture_output=True, text=True).stdout.strip() or "-"
     p.write_text(f"selected at {sha}\n" + "\n".join(body) + "\n")
-    print(f"r4_select: selection recorded at {p}")
+    print(f"r4_select: recorded {p}")
     return 0
 
 
 def measurement_code(doc):
-    """check that the pre-registered measurement code commit matches HEAD"""
     import re
     import subprocess
     try:
@@ -296,24 +255,20 @@ def measurement_code(doc):
     except OSError:
         m = None
     if not m:
-        print(f"r4_select: refusing -- {doc} names no measurement code commit (<!-- {MEASUREMENT_CODE_MARK} <sha> -->)",
-              file=sys.stderr)
+        print(f"r4_select: refusing -- {doc}: no {MEASUREMENT_CODE_MARK} sha", file=sys.stderr)
         return 3
     sha = m.group(1)
     r = subprocess.run(["git", "-C", str(ROOT), "diff", "--quiet", sha, "HEAD", "--",
                         *MEASUREMENT_CODE_FILES], capture_output=True, text=True)
     if r.returncode != 0:
-        print(f"r4_select: refusing -- measurement code differs from {sha} "
-              f"in {' '.join(MEASUREMENT_CODE_FILES)} "
-              f"({r.stderr.strip() or 'git diff --quiet exited ' + str(r.returncode)})",
-              file=sys.stderr)
+        print(f"r4_select: refusing -- differs from {sha} "
+              f"({r.stderr.strip() or 'exit ' + str(r.returncode)})", file=sys.stderr)
         return 3
-    print(f"r4_select: measurement code commit {sha} matches HEAD in {' '.join(MEASUREMENT_CODE_FILES)}")
+    print(f"r4_select: {sha} matches HEAD")
     return 0
 
 
 def keep_r2_runs(res):
-    """move R2's duty-20 run directories into pc-adapt-runs"""
     res = Path(res)
     dest = res / "pc-adapt-runs"
     moved = 0
@@ -329,19 +284,16 @@ def keep_r2_runs(res):
             if kv.get("mode") not in ("cpu-load", "hog") or kv.get("duty") != R2_DUTY:
                 continue
             if (dest / run.name).exists():
-                print(f"r4_select: refusing -- {dest / run.name} already exists; {run} not moved",
-                      file=sys.stderr)
+                print(f"r4_select: refusing -- {dest / run.name} exists", file=sys.stderr)
                 return 1
             dest.mkdir(parents=True, exist_ok=True)
             shutil.move(str(run), str(dest / run.name))
-            print(f"r4_select: kept R2's run {run} -> {dest / run.name}")
             moved += 1
-    print(f"r4_select: {moved} R2 run director{'y' if moved == 1 else 'ies'} moved to {dest}")
+    print(f"r4_select: moved {moved} -> {dest}")
     return 0
 
 
 def _pilot(od, steal=None, ctl_steal=100, rounds=3, missing=()):
-    """build a pilot batch from per-duty over_deadline_frac and steal_ticks lists"""
     rs = []
     for i in range(rounds):
         r = {PILOT_CONTROL: {"frames": 20000, "steal_ticks": ctl_steal, "over_deadline_frac": 0.0}}
@@ -355,11 +307,9 @@ def _pilot(od, steal=None, ctl_steal=100, rounds=3, missing=()):
 
 
 def _confirm(n=16, low=(), hit0=(), lo_below=True, prefix=""):
-    """build a confirmatory batch with chosen low-steal and zero-hit rounds"""
     rs = []
     for i in range(n):
         def arm(od, s, hit=5):
-            """return an arm's fields"""
             return {"frames": 20000, "steal_ticks": s, "over_deadline_frac": od, "hit": hit}
         r = {"fixed-hi": arm(0.4, 50 if i in low else 3000),
              "fixed-hi-probe": arm(0.4, 3000, 0 if i in hit0 else 5),
@@ -371,56 +321,53 @@ def _confirm(n=16, low=(), hit0=(), lo_below=True, prefix=""):
 
 
 def selftest():
-    """run the rule cases and return 1 on any failure"""
     import tempfile
     fails = []
 
     def expect(name, got, want):
-        """record a case that got something other than want"""
         if got != want:
             fails.append(f"{name}: got {got!r}, expected {want!r}")
-            print(f"  DID NOT FIRE  {name}")
+            print(f"  FAIL  {name}")
         else:
             print(f"  ok  {name}")
 
     def grid(f):
-        """return three rounds of f(duty) for every grid duty"""
         return {dd: [f(dd)] * 3 for dd in GRID}
     base = grid(lambda dd: 0.05 if dd < 45 else 0.30 if dd == 45 else 0.60)
     sel = lambda *a, **k: select(*a, **k)[1]   # noqa: E731
-    expect("the lowest duty in the band is chosen", sel(_pilot(base)), 45)
-    expect("a median exactly at 0.20 qualifies", sel(_pilot({**base, 42: [0.20, 0.25, 0.10]})), 42)
-    expect("just below 0.20 does not", sel(_pilot({**base, 42: [0.199, 0.25, 0.10]})), 45)
-    expect("a median exactly at 0.80 qualifies", sel(_pilot({**base, 45: [0.80] * 3})), 45)
-    expect("just above 0.80 does not: the next duty in the band is taken",
+    expect("base: selected 45", sel(_pilot(base)), 45)
+    expect("d42 median=0.20: selected 42", sel(_pilot({**base, 42: [0.20, 0.25, 0.10]})), 42)
+    expect("d42 median=0.199: selected 45", sel(_pilot({**base, 42: [0.199, 0.25, 0.10]})), 45)
+    expect("d45 median=0.80: selected 45", sel(_pilot({**base, 45: [0.80] * 3})), 45)
+    expect("d45 median=0.81: selected 46",
            sel(_pilot({**base, 45: [0.81] * 3})), 46)
-    expect("the median decides: 0.0, 0.1, 0.9 does not qualify",
+    expect("d30 [0.0,0.1,0.9]: selected 45",
            sel(_pilot({**base, 30: [0.0, 0.1, 0.9]})), 45)
     jump = grid(lambda dd: 0.05 if dd < 45 else 0.95)
     got = select(_pilot(jump))
-    expect("a loop that jumps over the band: none, and the reason says no duty loads it into the band",
+    expect("jump over band: none, 'no duty in the grid'",
            (got[1], "no duty in the grid loads the loop into" in (got[2] or "")), (None, True))
     got = select(_pilot(grid(lambda dd: 0.19)))
-    expect("nothing reaches 0.20: none, same reason", (got[1], "no duty" in (got[2] or "")), (None, True))
+    expect("all 0.19: none, 'no duty'", (got[1], "no duty" in (got[2] or "")), (None, True))
     got = select(_pilot(base, steal={dd: [100, 100, 100] for dd in GRID}))
-    expect("in the band but steal never above the control: none, and the reason says arrival",
+    expect("steal<=control: none, 'steal did not confirm arrival'",
            (got[1], "steal did not confirm arrival" in (got[2] or "")), (None, True))
-    expect("arrival not shown in one round skips that duty",
+    expect("d45 steal low r1: selected 46",
            sel(_pilot(base, steal={45: [3000, 100, 3000]})), 46)
-    expect("a steal tie with the control is not arrival",
+    expect("d45 steal tie r2: selected 46",
            sel(_pilot(base, steal={45: [3000, 3000, 100]}, ctl_steal=100)), 46)
-    expect("results in only 1 of 3 rounds do not qualify",
+    expect("d45 results 1/3: selected 46",
            sel(_pilot(base, missing={(45, 0), (45, 1)})), 46)
-    expect("results in 2 of 3 rounds do (median of the two)",
+    expect("d45 results 2/3: selected 45",
            sel(_pilot({**base, 45: [0.30, 0.10, 0.30]}, missing={(45, 1)})), 45)
     nc = _pilot(base)
     for r in nc["rounds"]:
         del r[PILOT_CONTROL]
-    expect("no control arm: arrival cannot be shown, none", sel(nc), None)
+    expect("no PILOT_CONTROL: none", sel(nc), None)
     pf = _pilot(base)
     pf["rounds"] = [{"one-round-" + k: v for k, v in r.items()} for r in pf["rounds"]]
-    expect("a prefixed pilot is read through its prefix", sel(pf, "one-round-"), 45)
-    expect("a prefixed pilot read without it selects nothing", sel(pf), None)
+    expect("prefix one-round-: selected 45", sel(pf, "one-round-"), 45)
+    expect("prefixed, no prefix arg: none", sel(pf), None)
     tp = Path(tempfile.mkdtemp())
     for lab, rd in ((PILOT_CONTROL, 0.05), (pilot_arm(45), 0.3)):
         for i in range(3):
@@ -429,7 +376,7 @@ def selftest():
                 f"INJECT watched_wall_ns=1000\nINJECT watched_vcpus=4\n"
                 f"INJECT watched_vcpu_rundelay_window_ns={int(rd * 4000)}\n")
     line = next(x for x in select(_pilot(base), runs=tp)[0] if x.startswith("duty 45:"))
-    expect("the pilot reports each duty's run-delay against the control's",
+    expect("duty 45 line: run-delay [0.3]x3 vs control [0.05]x3",
            "run-delay fraction [0.3, 0.3, 0.3] against control [0.05, 0.05, 0.05]" in line, True)
     shutil.rmtree(tp)
 
@@ -441,40 +388,39 @@ def selftest():
         first = (tr / "s").read_text()
         rc2 = record(tr / "s", "a\nselected_duty=45")
         rc3 = record(tr / "s", "a\nselected_duty=46")
-    expect("the selection is recorded once, kept when it agrees, refused when it does not",
+    expect("record new/match/mismatch: rc 0/0/3, file unchanged",
            (rc1, rc2, rc3, (tr / "s").read_text() == first), (0, 0, 3, True))
     shutil.rmtree(tr)
 
     def gd(pr, lo):
-        """return the guard lines for a round with these medians"""
         return guards([{"fixed-hi-probe": {"over_deadline_frac": pr},
                         "fixed-lo": {"over_deadline_frac": lo}}])
-    expect("no guard at a loaded, unsaturated loop",
+    expect("probe=0.4 lo=0.01: guards not triggered",
            [x.split(":")[1].strip()[:3] for x in gd(0.4, 0.01)], ["not", "not"])
-    expect("fixed-hi-probe at 0.9 labels P7/P8", gd(0.9, 0.01)[0].startswith("guard P7/P8: NOT INFORMATIVE"), True)
-    expect("fixed-hi-probe at 0.899 does not", gd(0.899, 0.01)[0].startswith("guard P7/P8: not triggered"), True)
-    expect("fixed-lo at 0.20 labels P6's halving clause and the ratio",
+    expect("probe=0.9: P7/P8 NOT INFORMATIVE", gd(0.9, 0.01)[0].startswith("guard P7/P8: NOT INFORMATIVE"), True)
+    expect("probe=0.899: P7/P8 not triggered", gd(0.899, 0.01)[0].startswith("guard P7/P8: not triggered"), True)
+    expect("lo=0.20: P6 NOT INFORMATIVE",
            gd(0.4, 0.2)[1].startswith("guard P6: NOT INFORMATIVE"), True)
-    expect("fixed-lo at 0.199 does not", gd(0.4, 0.199)[1].startswith("guard P6: not triggered"), True)
+    expect("lo=0.199: P6 not triggered", gd(0.4, 0.199)[1].startswith("guard P6: not triggered"), True)
 
     lines, kept, void = arrival(_confirm())
-    expect("every round shows arrival: all kept", (len(kept), void), (16, False))
-    expect("adaptive and fixed-lo below the control do not drop a round", len(kept), 16)
+    expect("all arrive: kept 16, not VOID", (len(kept), void), (16, False))
+    expect("adaptive/fixed-lo<=control: kept 16", len(kept), 16)
     lines, kept, void = arrival(_confirm(low={0, 1, 2}))
-    expect("fixed-hi at or below the control drops that round", (len(kept), void), (13, False))
+    expect("fixed-hi<=control x3: kept 13", (len(kept), void), (13, False))
     lines, kept, void = arrival(_confirm(low={0, 1, 2, 3, 4}))
-    expect("fewer than 12 of 16 passing: VOID", (len(kept), void), (11, True))
+    expect("fixed-hi<=control x5: kept 11, VOID", (len(kept), void), (11, True))
     lines, kept, void = arrival(_confirm(low={0, 1}, hit0={2, 3}))
-    expect("a round must pass the hit rule too: 14 arrive, 12 pass both, not void",
+    expect("arrive 14, hit=0 x2: kept 14, not VOID",
            (len(kept), void), (14, False))
     lines, kept, void = arrival(_confirm(low={0, 1}, hit0={2, 3, 4}))
-    expect("14 arrive, 11 pass both: VOID", void, True)
+    expect("arrive 14, hit=0 x3: VOID", void, True)
     c = _confirm()
     for r in c["rounds"]:
         del r[R4_CONTROL]
-    expect("no control: nothing kept, VOID", arrival(c)[1:], ([], True))
+    expect("no R4_CONTROL: kept 0, VOID", arrival(c)[1:], ([], True))
     lines, kept, void = arrival(_confirm(prefix="one-round-"), prefix="one-round-")
-    expect("a prefixed batch is kept and written with plain labels",
+    expect("prefix one-round-: kept 16, plain labels",
            (len(kept), sorted(kept[0])), (16, sorted(list(ARMS) + [R4_CONTROL])))
 
     t = Path(tempfile.mkdtemp())
@@ -487,7 +433,7 @@ def selftest():
     import io
     with contextlib.redirect_stdout(io.StringIO()):
         rc = keep_r2_runs(t)
-    expect("R2's duty-20 runs are kept aside, another duty's is left",
+    expect("keep_r2_runs: duty=20 moved, duty=50 left",
            (rc, (t / "pc-adapt-runs" / "fixed-hi-r0").is_dir(),
             (t / "pc-adapt-runs" / "adaptive-r0").is_dir(), (t / "fixed-lo-r0").is_dir()),
            (0, True, True, True))
@@ -495,22 +441,20 @@ def selftest():
     (t / "fixed-hi-r0" / "inject.meta").write_text("INJECT mode=hog duty=20\n")
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         rc = keep_r2_runs(t)
-    expect("an existing kept run is never overwritten", (rc, (t / "fixed-hi-r0").is_dir()), (1, True))
+    expect("keep_r2_runs existing: rc 1, not overwritten", (rc, (t / "fixed-hi-r0").is_dir()), (1, True))
     shutil.rmtree(t)
 
     if fails:
-        print("\nselftest: r4_select cannot apply these:")
+        print("\nSELFTEST FAILED")
         for f in fails:
             print(f"  {f}")
         return 1
-    print("\nselftest: the selection rule, the arrival rule, the record and the guards each say yes and no")
+    print("\nselftest: ok")
     return 0
 
 
 def main():
-    """parse the arguments and run a mode"""
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser()
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--select", metavar="PILOT")
     g.add_argument("--arrival", nargs=2, metavar=("BATCH", "OUT"))
@@ -533,17 +477,17 @@ def main():
     if a.select:
         d = load(a.select)
         if d is None:
-            print(f"r4_select: {a.select} is not a readable pilot batch", file=sys.stderr)
+            print(f"r4_select: {a.select}: unreadable", file=sys.stderr)
             return 2
         lines, chosen, reason = select(d, a.prefix, Path(a.select).resolve().parent)
         out = [f"pilot: {a.select}"] + lines
         if chosen is None and a.one_round_fallback:
             out.append(f"ONE-ROUND: no duty qualified ({reason}); the grid's lowest, {GRID[0]}, is "
-                       f"forced so the one-round run exercises stage B")
+                       f"forced")
             out.append("one_round_forced=1")
             chosen = GRID[0]
         elif chosen is None:
-            out.append(reason + " -- R4 is not run, and that is its result")
+            out.append(reason)
         out.append(f"selected_duty={'none' if chosen is None else chosen}")
         text = "\n".join(out)
         print(text)
@@ -551,7 +495,7 @@ def main():
     src, out = a.arrival
     d = load(src)
     if d is None:
-        print(f"r4_select: {src} is not a readable batch", file=sys.stderr)
+        print(f"r4_select: {src}: unreadable", file=sys.stderr)
         return 2
     lines, kept, void = arrival(d, a.prefix, Path(src).resolve().parent)
     print("\n".join(lines))

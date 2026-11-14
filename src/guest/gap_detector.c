@@ -1,4 +1,3 @@
-// measure the time this vCPU was not executing from gaps in a clock loop
 #define _GNU_SOURCE
 #include <sched.h>
 #include <stdint.h>
@@ -10,7 +9,6 @@
 
 #include "steal_read.h"
 
-// return CLOCK_MONOTONIC in ns
 static uint64_t now_ns(void)
 {
     struct timespec ts;
@@ -18,7 +16,6 @@ static uint64_t now_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
-// return the tick-based steal total from /proc/stat in ns
 static uint64_t tick_steal_total(void)
 {
     FILE *f = fopen("/proc/stat", "r");
@@ -35,7 +32,6 @@ static uint64_t tick_steal_total(void)
     return out * 10000000ull;
 }
 
-// pin to a CPU, sum the clock gaps over the run and print them
 int main(int argc, char **argv)
 {
     int cpu = 1;
@@ -54,13 +50,12 @@ int main(int argc, char **argv)
     CPU_ZERO(&set);
     CPU_SET(cpu, &set);
     if (sched_setaffinity(0, sizeof(set), &set)) {
-        fprintf(stderr, "gap_detector: cannot pin to cpu %d\n", cpu);
+        fprintf(stderr, "gap_detector: pin cpu %d failed\n", cpu);
         return 2;
     }
     struct sched_param sp = {.sched_priority = 90};
     if (sched_setscheduler(0, SCHED_FIFO, &sp))
-        fprintf(stderr, "gap_detector: WARNING not real-time; guest-side preemption will "
-                        "be counted as suspension\n");
+        fprintf(stderr, "gap_detector: WARNING not real-time\n");
 
     struct steal_counter s;
     int have_ns = (steal_counter_open(&s, cpu) == 0);

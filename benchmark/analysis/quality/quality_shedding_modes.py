@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""Histogram the modes each frame of the adaptive arm completed and freeze it
-
-Usage: adapt_modes.py [--paired F] [--arm LABEL] [--freeze] [--selftest]"""
-
 import argparse
 import json
 import struct
@@ -20,7 +16,6 @@ HDR = struct.Struct("<7Q4I")
 
 
 def modes_of(telemetry):
-    """read the modes completed per frame from a telemetry file"""
     p = Path(telemetry)
     if not p.exists():
         return []
@@ -31,7 +26,6 @@ def modes_of(telemetry):
 
 
 def collect(paired_path, arm="adaptive"):
-    """histogram the modes of every round of an arm"""
     rounds = json.loads((ROOT / paired_path).read_text())["rounds"]
     hist, used, missing = Counter(), 0, []
     for i in range(len(rounds)):
@@ -46,19 +40,17 @@ def collect(paired_path, arm="adaptive"):
 
 
 def summarise(hist, arm="adaptive"):
-    """summarise a modes histogram against the frozen error curve"""
     if not hist:
-        raise SystemExit(f"adapt_modes: no frames found for the {arm} arm")
+        raise SystemExit(f"adapt_modes: no frames {arm}")
     q = json.loads(QUALITY.read_text()) if QUALITY.exists() else {}
     curve, full = q.get("relerr_curve"), q.get("modes")
     total = sum(hist.values())
 
     if not curve or full is None:
-        raise SystemExit("adapt_modes: results/earlier_phase/frozen/quality-frozen.json has no curve")
+        raise SystemExit("adapt_modes: no curve")
     outside = [m for m in hist if not 0 <= m <= full]
     if outside:
-        raise SystemExit(f"adapt_modes: frames report {sorted(outside)[:5]} modes, outside the "
-                         f"frozen curve's 0..{full}")
+        raise SystemExit(f"adapt_modes: modes {sorted(outside)[:5]} outside 0..{full}")
 
     mean_err = sum(n * curve[m] for m, n in hist.items()) / total
     ordered = sorted(hist)
@@ -87,7 +79,6 @@ def summarise(hist, arm="adaptive"):
 
 
 def selftest():
-    """check that summarise refuses bad histograms and scores a good one"""
     global QUALITY
     if not QUALITY.exists():
         tmp = tempfile.TemporaryDirectory()
@@ -96,38 +87,35 @@ def selftest():
     ok = True
 
     def expect(name, fn):
-        """check that fn exits with a refusal"""
         nonlocal ok
         try:
             fn()
         except SystemExit as e:
             print(f"  refused {name}: {str(e)[:90]}")
             return
-        print(f"  ACCEPTED {name} -- the check does not fire")
+        print(f"  ACCEPTED {name}")
         ok = False
 
-    expect("an arm with no frames at all", lambda: summarise(Counter()))
+    expect("Counter() empty: refused", lambda: summarise(Counter()))
     q = json.loads(QUALITY.read_text()) if QUALITY.exists() else {"modes": 480}
     full = q["modes"]
-    expect("frames reporting more modes than the operator has",
+    expect("modes=full+1: refused",
            lambda: summarise(Counter({full + 1: 10})))
-    expect("frames reporting a negative mode count", lambda: summarise(Counter({-1: 10})))
+    expect("modes=-1: refused", lambda: summarise(Counter({-1: 10})))
 
     good = summarise(Counter({full: 60, full - 16: 30, full // 2: 10}))
     if not (0 < good["mean_relerr"] < 1 and good["full_quality_frac"] == 0.6):
-        print(f"  BROKEN: the healthy path gave {good['mean_relerr']} / "
+        print(f"  BROKEN: {good['mean_relerr']} / "
               f"{good['full_quality_frac']}")
         ok = False
     else:
-        print(f"  scored a constructed run: mean error {good['mean_relerr']:.5f}, "
-              f"{100*good['full_quality_frac']:.0f}% at full quality")
+        print(f"  ok mean_relerr={good['mean_relerr']:.5f} full={good['full_quality_frac']:.2f}")
 
-    print("selftest: " + ("every refusal fired" if ok else "a refusal did not fire"))
+    print("selftest: " + ("ok" if ok else "FAILED"))
     return 0 if ok else 1
 
 
 def main():
-    """print the modes summary and optionally freeze it"""
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--paired", default="results/earlier_phase/paired/paired-adapt.json")
@@ -144,14 +132,12 @@ def main():
     s = summarise(hist, a.arm)
     s["rounds_used"] = used
     s["rounds_missing"] = missing
-    print(f"{a.arm}: {s['frames']} frames over {used} rounds"
-          + (f", {len(missing)} round(s) had no telemetry: {missing}" if missing else ""))
-    print(f"  stopped at {s['distinct_stops']} distinct mode counts, "
-          f"min {s['modes_min']}, p1 {s['modes_p01']}, p50 {s['modes_p50']}, "
-          f"p99 {s['modes_p99']}, full {s['full_modes']}")
-    print(f"  {100*s['full_quality_frac']:.1f}% of frames completed every mode")
-    print(f"  mean delivered error {s['mean_relerr']:.6f}, worst single frame "
-          f"{s['worst_frame_relerr']:.6f}")
+    print(f"{a.arm}: frames={s['frames']} rounds={used}"
+          + (f" no_telemetry={missing}" if missing else ""))
+    print(f"  stops={s['distinct_stops']} min={s['modes_min']} p1={s['modes_p01']} "
+          f"p50={s['modes_p50']} p99={s['modes_p99']} full={s['full_modes']}")
+    print(f"  full_quality_frac={s['full_quality_frac']:.3f}")
+    print(f"  mean_relerr={s['mean_relerr']:.6f} worst={s['worst_frame_relerr']:.6f}")
     if a.freeze:
         from benchmark import lib
         lib.refuse_unpublishable_experiments()

@@ -1,4 +1,3 @@
-// native activity that forks a process for each of the loop's four stages
 #define _GNU_SOURCE
 #include <android/log.h>
 #include <android/window.h>
@@ -51,7 +50,6 @@ static int headroom_on, headroom_interval_ms, headroom_window_ms, headroom_spin_
 static int headroom_gen, headroom_going, headroom_exited;
 static pthread_t headroom_thread;
 
-// write text to files/<name>
 static int write_file(const char *name, const char *text)
 {
     char path[PATH_MAX], tmp[PATH_MAX];
@@ -76,7 +74,6 @@ static int write_file(const char *name, const char *text)
     return rename(tmp, path);
 }
 
-// remove files/<name>
 static void remove_file(const char *name)
 {
     char path[PATH_MAX];
@@ -84,17 +81,15 @@ static void remove_file(const char *name)
     unlink(path);
 }
 
-// write an RC error line naming the reason and log it
 static void write_error(const char *reason)
 {
     char line[128];
     snprintf(line, sizeof(line), "RC error=%s\n", reason);
     __android_log_print(ANDROID_LOG_ERROR, TAG, "%s", line);
     if (write_file("rc", line) != 0)
-        __android_log_print(ANDROID_LOG_ERROR, TAG, "cannot write %s/rc: %s", files_dir, strerror(errno));
+        __android_log_print(ANDROID_LOG_ERROR, TAG, "write %s/rc: %s", files_dir, strerror(errno));
 }
 
-// read files/run.args into args_text
 static const char *read_args(void)
 {
     char path[PATH_MAX];
@@ -124,7 +119,6 @@ static const char *read_args(void)
     return NULL;
 }
 
-// split the stage lines into argv, log paths and environment
 static const char *build_stages(void)
 {
     char *lines[STAGES];
@@ -152,7 +146,6 @@ static const char *build_stages(void)
     return NULL;
 }
 
-// exec the pipeline for stage i in the forked process
 static void exec_stage(int i, const sigset_t *empty, const struct sigaction *dfl)
 {
     for (int s = 1; s < NSIG; s++)
@@ -168,12 +161,11 @@ static void exec_stage(int i, const sigset_t *empty, const struct sigaction *dfl
     if (fd > 2)
         close(fd);
     execve(exe_path, stage_argv[i], stage_env);
-    static const char msg[] = "loop_app: execve of the pipeline failed\n";
+    static const char msg[] = "loop_app: execve failed\n";
     write(2, msg, sizeof(msg) - 1);
     _exit(127);
 }
 
-// wait for a stage process and return its exit status
 static int wait_stage(pid_t pid)
 {
     int st;
@@ -190,7 +182,6 @@ static int wait_stage(pid_t pid)
     return -1;
 }
 
-// read the sampler's interval and window from files/headroom.args
 static const char *read_headroom_args(void)
 {
     char path[PATH_MAX], text[HEADROOM_ARGS_BYTES];
@@ -213,7 +204,6 @@ static const char *read_headroom_args(void)
     return NULL;
 }
 
-// return CLOCK_BOOTTIME in ns
 static long long boottime_ns(void)
 {
     struct timespec t;
@@ -221,7 +211,6 @@ static long long boottime_ns(void)
     return (long long)t.tv_sec * 1000000000LL + t.tv_nsec;
 }
 
-// return this thread's CPU time in ns
 static long long thread_cpu_ns(void)
 {
     struct timespec t;
@@ -229,7 +218,6 @@ static long long thread_cpu_ns(void)
     return (long long)t.tv_sec * 1000000000LL + t.tv_nsec;
 }
 
-// spend ms of this thread's CPU time
 static void spin_cpu_ms(int ms)
 {
     long long until = thread_cpu_ns() + (long long)ms * 1000000LL;
@@ -239,7 +227,6 @@ static void spin_cpu_ms(int ms)
             x += (unsigned long)i;
 }
 
-// sample Android's CPU headroom every interval into files/log/headroom.log
 static void *headroom_sampler(void *arg)
 {
     int gen = (int)(intptr_t)arg;
@@ -247,7 +234,7 @@ static void *headroom_sampler(void *arg)
     snprintf(path, sizeof(path), "%s/log/headroom.log", files_dir);
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0) {
-        __android_log_print(ANDROID_LOG_ERROR, TAG, "cannot write %s: %s", path, strerror(errno));
+        __android_log_print(ANDROID_LOG_ERROR, TAG, "write %s: %s", path, strerror(errno));
         return NULL;
     }
     void *lib = dlopen("libandroid.so", RTLD_NOW);
@@ -286,7 +273,6 @@ static void *headroom_sampler(void *arg)
     return NULL;
 }
 
-// stop the headroom sampler, waiting at most 2 s for it
 static void stop_headroom(void)
 {
     int gen = __atomic_load_n(&headroom_going, __ATOMIC_ACQUIRE);
@@ -299,12 +285,11 @@ static void stop_headroom(void)
     if (__atomic_load_n(&headroom_exited, __ATOMIC_ACQUIRE) == gen) {
         pthread_join(headroom_thread, NULL);
     } else {
-        __android_log_print(ANDROID_LOG_WARN, TAG, "the headroom sampler is still in a call after 2 s; leaving it");
+        __android_log_print(ANDROID_LOG_WARN, TAG, "headroom sampler stuck");
         pthread_detach(headroom_thread);
     }
 }
 
-// start the four stages, wait for them and write their exit codes
 static void run_stages(void)
 {
     remove_file("rc");
@@ -345,7 +330,7 @@ static void run_stages(void)
     for (int i = 0; i < started; i++)
         snprintf(pids + strlen(pids), sizeof(pids) - strlen(pids), "%d\n", (int)stage_pid[i]);
     if (write_file("pids", pids) != 0)
-        __android_log_print(ANDROID_LOG_ERROR, TAG, "cannot write %s/pids: %s", files_dir, strerror(errno));
+        __android_log_print(ANDROID_LOG_ERROR, TAG, "write %s/pids: %s", files_dir, strerror(errno));
     if (started < STAGES) {
         for (int i = 0; i < started; i++)
             kill(stage_pid[i], SIGTERM);
@@ -364,10 +349,9 @@ static void run_stages(void)
     stop_headroom();
     __android_log_print(ANDROID_LOG_INFO, TAG, "%s", line);
     if (write_file("rc", line) != 0)
-        __android_log_print(ANDROID_LOG_ERROR, TAG, "cannot write %s/rc: %s", files_dir, strerror(errno));
+        __android_log_print(ANDROID_LOG_ERROR, TAG, "write %s/rc: %s", files_dir, strerror(errno));
 }
 
-// run the stages on their own thread
 static void *stage_thread(void *unused)
 {
     (void)unused;
@@ -380,7 +364,6 @@ static void *stage_thread(void *unused)
     return NULL;
 }
 
-// set files_dir and exe_path
 static const char *find_paths(struct android_app *app)
 {
     Dl_info info;
@@ -398,7 +381,6 @@ static const char *find_paths(struct android_app *app)
     return NULL;
 }
 
-// start a run on the activity's first resume
 static void on_app_cmd(struct android_app *app, int32_t cmd)
 {
     int *resumed = app->userData;
@@ -408,7 +390,7 @@ static void on_app_cmd(struct android_app *app, int32_t cmd)
     pthread_mutex_lock(&run_lock);
     if (run_going) {
         pthread_mutex_unlock(&run_lock);
-        __android_log_print(ANDROID_LOG_WARN, TAG, "a run is already going in this process; not starting another");
+        __android_log_print(ANDROID_LOG_WARN, TAG, "run active");
         return;
     }
     const char *reason = find_paths(app);
@@ -435,7 +417,6 @@ static void on_app_cmd(struct android_app *app, int32_t cmd)
     pthread_mutex_unlock(&run_lock);
 }
 
-// poll the activity's looper until it is destroyed
 void android_main(struct android_app *app)
 {
     int resumed = 0;

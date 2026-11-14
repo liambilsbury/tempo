@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""Print this host's topology and test that single-level rows stay out of the published data
-
-Usage: topology.py [--selftest]"""
-
 import argparse
 import contextlib
 import io
@@ -26,7 +22,6 @@ BARE_CPUINFO = "processor\t: 0\nflags\t\t: fpu vme sse2 svm\n"
 
 @contextlib.contextmanager
 def patched(obj, **attrs):
-    """set attributes on an object for the length of a with block"""
     old = {k: getattr(obj, k) for k in attrs}
     for k, v in attrs.items():
         setattr(obj, k, v)
@@ -38,7 +33,6 @@ def patched(obj, **attrs):
 
 
 def fixed(topology):
-    """return a host_topology stand-in that reports the given topology"""
     cpu, dv = {lib.TOPOLOGY_NESTED: (NESTED_CPUINFO, "kvm"),
                lib.TOPOLOGY_SINGLE: (BARE_CPUINFO, "none"),
                lib.TOPOLOGY_UNKNOWN: (BARE_CPUINFO, "kvm")}[topology]
@@ -47,7 +41,6 @@ def fixed(topology):
 
 
 def refused(fn, *a, **kw):
-    """return True when fn exits non-zero, with its output discarded"""
     try:
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             fn(*a, **kw)
@@ -59,7 +52,6 @@ def refused(fn, *a, **kw):
 
 
 def tsv_rows(path):
-    """read a TSV file as a list of dicts"""
     if not Path(path).exists():
         return []
     lines = Path(path).read_text().splitlines()
@@ -68,7 +60,6 @@ def tsv_rows(path):
 
 
 def experiment_dir(exp, name, topology=None, n=4):
-    """write a minimal completed run directory like experiment.sh leaves"""
     d = exp / name
     (d / "l2").mkdir(parents=True)
     meta = "load1=0.1 free_gb=100 foreign_pipelines=0 exclusive=1\nwhy=idle\n"
@@ -86,7 +77,6 @@ def experiment_dir(exp, name, topology=None, n=4):
 
 
 def selftest():
-    """run the separation selftest in a temporary directory"""
     tmp = Path(tempfile.mkdtemp(prefix="tempo-topo-"))
     os.environ.setdefault("MILK_SHM_DIR", str(tmp / "shm"))
     try:
@@ -96,40 +86,39 @@ def selftest():
 
 
 def _selftest(tmp):
-    """check every topology separation path under tmp"""
     cases = []
 
     for cpu, dv, want, name in [
-            (NESTED_CPUINFO, "kvm", "nested", "hypervisor flag + a VM detected -> nested"),
-            (NESTED_CPUINFO, "absent", "nested", "hypervisor flag, no second opinion -> nested"),
-            (BARE_CPUINFO, "none", "single-level", "no flag, no VM detected -> single-level"),
-            (BARE_CPUINFO, "absent", "single-level", "no flag, no second opinion -> single-level"),
-            (NESTED_CPUINFO, "none", "unknown", "flag set but no VM detected -> unknown"),
-            (BARE_CPUINFO, "kvm", "unknown", "no flag but a VM detected -> unknown")]:
+            (NESTED_CPUINFO, "kvm", "nested", "flag=1 virt=kvm: nested"),
+            (NESTED_CPUINFO, "absent", "nested", "flag=1 virt=absent: nested"),
+            (BARE_CPUINFO, "none", "single-level", "flag=0 virt=none: single-level"),
+            (BARE_CPUINFO, "absent", "single-level", "flag=0 virt=absent: single-level"),
+            (NESTED_CPUINFO, "none", "unknown", "flag=1 virt=none: unknown"),
+            (BARE_CPUINFO, "kvm", "unknown", "flag=0 virt=kvm: unknown")]:
         cases.append((name, lib.host_topology(cpu, dv)["topology"] == want))
-    cases.append(("the word in a model name is not the flag",
+    cases.append(("'hypervisor' in model name: single-level",
                   lib.host_topology("model name\t: hypervisor-ready cpu\n" + BARE_CPUINFO,
                                     "none")["topology"] == "single-level"))
 
-    cases.append(("a nested row routes to the published table",
+    cases.append(("table_for(nested): PUBLISHED_TABLE",
                   lib.table_for("nested") == lib.PUBLISHED_TABLE))
-    cases.append(("a single-level row routes to its own table",
+    cases.append(("table_for(single-level): single-level.tsv",
                   lib.table_for("single-level") == "single-level.tsv"))
-    cases.append(("an unknown row routes to its own table",
+    cases.append(("table_for(unknown): unknown.tsv",
                   lib.table_for("unknown") == "unknown.tsv"))
-    cases.append(("a row with no topology is refused a table", refused(lib.table_for, "-")))
+    cases.append(("table_for(-): refused", refused(lib.table_for, "-")))
 
     res = tmp / "append"
     with patched(lib, RESULTS=res):
         row = lib.blank_row()
-        cases.append(("results.tsv refuses a single-level row", refused(
+        cases.append(("append results.tsv topology=single-level: refused", refused(
             lib.append_rows, [dict(row, topology="single-level")], lib.PUBLISHED_TABLE)))
-        cases.append(("results.tsv refuses an unknown row", refused(
+        cases.append(("append results.tsv topology=unknown: refused", refused(
             lib.append_rows, [dict(row, topology="unknown")], lib.PUBLISHED_TABLE)))
-        cases.append(("results.tsv refuses a row that does not say", refused(
+        cases.append(("append results.tsv no topology: refused", refused(
             lib.append_rows, [dict(row)], lib.PUBLISHED_TABLE)))
         ok = not refused(lib.append_rows, [dict(row, topology="nested")], lib.PUBLISHED_TABLE)
-        cases.append(("results.tsv accepts a nested row", ok and len(
+        cases.append(("append results.tsv topology=nested: 1 row", ok and len(
             tsv_rows(res / lib.PUBLISHED_TABLE)) == 1))
 
     res = tmp / "run"
@@ -147,7 +136,7 @@ def _selftest(tmp):
             except SystemExit:
                 pass
     sl = tsv_rows(res / "single-level.tsv")
-    cases.append(("benchmark/run/configuration.py on a single-level host writes single-level.tsv, not results.tsv",
+    cases.append(("configuration.py host=single-level: single-level.tsv only",
                   not (res / lib.PUBLISHED_TABLE).exists() and len(sl) == 1
                   and sl[0]["topology"] == "single-level"))
 
@@ -164,11 +153,11 @@ def _selftest(tmp):
             ingest.main()
     pub = [r["run_id"] for r in tsv_rows(res / lib.PUBLISHED_TABLE)]
     sep = [r["run_id"] for r in tsv_rows(res / "single-level.tsv")]
-    cases.append(("ingest sends a nested run to results.tsv and only that", pub == ["ne-r0"]))
-    cases.append(("ingest sends a single-level run to single-level.tsv", "sl-r0" in sep))
-    cases.append(("a run dir that predates the field takes this machine's topology",
+    cases.append(("ingest nested: results.tsv == [ne-r0]", pub == ["ne-r0"]))
+    cases.append(("ingest single-level: sl-r0 in single-level.tsv", "sl-r0" in sep))
+    cases.append(("ingest no topology field: host topology",
                   "old-r0" in sep and "old-r0" not in pub))
-    cases.append(("ingest is idempotent per table", len(sep) == 2))
+    cases.append(("ingest x2: single-level.tsv rows=2", len(sep) == 2))
 
     try:
         from tools.results import verify_claims
@@ -180,30 +169,30 @@ def _selftest(tmp):
     (res / lib.PUBLISHED_TABLE).write_text(
         "\t".join(legacy) + "\n" + "\t".join("-" for _ in legacy) + "\n")
     (res / "paired-old.json").write_text(json.dumps({"metric": "p999_ns", "rounds": []}))
-    cases.append(("committed data without a topology field reads as nested",
+    cases.append(("legacy no topology column: unpublishable=[]",
                   lib.unpublishable(res) == []))
     with patched(lib, RESULTS=res):
-        cases.append(("a legacy-only results dir is publishable",
+        cases.append(("legacy results/: refuse_unpublishable passes",
                       not refused(lib.refuse_unpublishable)))
         cols = legacy + ["topology"]
         (res / lib.PUBLISHED_TABLE).write_text(
             "\t".join(cols) + "\n" + "\t".join("-" for _ in cols) + "\n"
             + "\t".join("sl" if c == "run_id" else "single-level" if c == "topology" else "-"
                         for c in cols) + "\n")
-        cases.append(("a single-level row in results.tsv is refused",
+        cases.append(("results.tsv single-level row: refused",
                       refused(lib.refuse_unpublishable)))
         (res / lib.PUBLISHED_TABLE).write_text(
             "\t".join(legacy) + "\n" + "\t".join("-" for _ in legacy) + "\n")
         sl_json = res / "paired-pc.json"
         sl_json.write_text(json.dumps({"metric": "p999_ns", "topology": "single-level",
                                        "rounds": []}))
-        cases.append(("a single-level paired file in results/ is refused",
+        cases.append(("results/paired-pc.json single-level: refused",
                       refused(lib.refuse_unpublishable)))
         if verify_claims:
-            cases.append(("verify_claims.py refuses a single-level paired file in results/",
+            cases.append(("verify_claims.py single-level paired: refused",
                           refused(verify_claims.main)))
         from benchmark.score.nested import budget as preregistration_budget
-        cases.append(("a verdict block is refused from a single-level batch",
+        cases.append(("budget.write_markdown single-level: refused",
                       refused(preregistration_budget.write_markdown, str(res / "no-doc.md"),
                               paired_path=str(sl_json))))
         sl_json.unlink()
@@ -217,14 +206,14 @@ def _selftest(tmp):
             patched(paired, ROOT=res, run_one=stub):
         with patched(sys, argv=["paired.py", "--condition", "a:none", "--repeats", "1",
                                 "--out", "results/earlier_phase/paired/paired-fixed.json"]):
-            cases.append(("paired.py refuses a single-level batch beside published results",
+            cases.append(("paired.py single-level --out results/earlier_phase: refused",
                           refused(paired.main) and not launched))
         with patched(sys, argv=["paired.py", "--condition", "a:none", "--repeats", "1"]):
             with contextlib.redirect_stdout(io.StringIO()), \
                     contextlib.redirect_stderr(io.StringIO()):
                 paired.main()
     out = res / "results" / "experiments" / "paired-latest.json"
-    cases.append(("a single-level batch defaults under results/experiments/ and says so",
+    cases.append(("paired.py single-level: results/experiments/paired-latest.json, topology=single-level",
                   out.exists() and json.loads(out.read_text()).get("topology") == "single-level"
                   and not (res / "results" / "paired-latest.json").exists()))
 
@@ -232,17 +221,17 @@ def _selftest(tmp):
     exp = res / "experiments"
     experiment_dir(exp, "control-r0", "nested")
     with patched(lib, RESULTS=res):
-        cases.append(("a nested corpus may be frozen",
+        cases.append(("freeze nested corpus: ok",
                       not refused(lib.refuse_unpublishable_experiments)))
         experiment_dir(exp, "hogsync-r0", "single-level")
         from benchmark.analysis.recall import rows as recall_rows
         with patched(recall_rows, FROZEN=res / "recall-frozen.json"):
-            cases.append(("recall_rows refuses to freeze a corpus with a single-level run",
+            cases.append(("recall_rows.snapshot with single-level run: refused",
                           refused(recall_rows.snapshot)
                           and not (res / "recall-frozen.json").exists()))
 
     live = lib.unpublishable()
-    cases.append(("the committed results/ holds no non-nested data" +
+    cases.append(("results/: unpublishable=[]" +
                   (f": {'; '.join(live[:3])}" if live else ""), not live))
 
     bad = sum(1 for _, good in cases if not good)
@@ -253,7 +242,6 @@ def _selftest(tmp):
 
 
 def main():
-    """print the host topology or run the selftest"""
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--selftest", action="store_true")
@@ -263,8 +251,7 @@ def main():
     t = lib.host_topology()
     print(f"topology={t['topology']} hypervisor_flag={t['hypervisor_flag']} "
           f"detect_virt={t['detect_virt']}")
-    print(f"  {t['why']}")
-    print(f"  new rows go to {lib.table_for(t['topology'])}")
+    print(f"table={lib.table_for(t['topology'])}")
     return 0
 
 

@@ -1,4 +1,3 @@
-// read the guest's nanosecond steal counter
 #ifndef TEMPO_STEAL_READ_H
 #define TEMPO_STEAL_READ_H
 
@@ -9,7 +8,6 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-// layout of KVM's steal time record
 struct tempo_kvm_steal_time {
     uint64_t steal;
     uint32_t version;
@@ -19,7 +17,6 @@ struct tempo_kvm_steal_time {
     uint32_t pad[11];
 };
 
-// mapped steal counter for a CPU
 struct steal_counter {
     const volatile struct tempo_kvm_steal_time *st;
     void    *map;
@@ -27,7 +24,6 @@ struct steal_counter {
     int      cpu;
 };
 
-// read a CPU's offset within its page from /proc/tempo_steal
 static inline long steal_counter_offset(int cpu)
 {
     FILE *f = fopen("/proc/tempo_steal", "r");
@@ -47,7 +43,6 @@ static inline long steal_counter_offset(int cpu)
     return off;
 }
 
-// map a CPU's steal page, return 0 on success
 static inline int steal_counter_open(struct steal_counter *s, int cpu)
 {
     memset(s, 0, sizeof(*s));
@@ -69,7 +64,6 @@ static inline int steal_counter_open(struct steal_counter *s, int cpu)
     return 0;
 }
 
-// read the steal value under the version seqlock
 static inline uint64_t steal_counter_read(const struct steal_counter *s)
 {
     uint32_t v1, v2;
@@ -84,7 +78,6 @@ static inline uint64_t steal_counter_read(const struct steal_counter *s)
     return steal;
 }
 
-// unmap the steal page
 static inline void steal_counter_close(struct steal_counter *s)
 {
     if (s->map)

@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""Measure each quality tier's cost and error
-
-Usage: quality.py [--slopes N] [--acts N] [--freeze] [--selftest] [--dry-run]
-  --freeze     also write the frozen snapshot"""
-
 import argparse
 import json
 import math
@@ -24,7 +19,6 @@ RELERR_TOL = 2e-4
 
 
 def reconstruct_hash(tag, i, j):
-    """hash a tag and index pair to 32 bits as reconstruct.h does"""
     x = (tag * 0x9E3779B1 + i * 0x85EBCA77 + j * 0xC2B2AE3D + 0x27D4EB2F) & M32
     x ^= x >> 16
     x = (x * 0x7FEB352D) & M32
@@ -35,28 +29,23 @@ def reconstruct_hash(tag, i, j):
 
 
 def reconstruct_val(tag, i, j):
-    """map the hash to a value in [-1, 1)"""
     return reconstruct_hash(tag, i, j) * (2.0 / 4294967296.0) - 1.0
 
 
 def auto_modes(slopes, acts):
-    """return the full mode count for a geometry"""
     m = (acts * slopes) // (slopes + acts)
     return max(m, TIERS)
 
 
 def tier_modes(modes, tier):
-    """return the modes a tier keeps"""
     return max(modes >> tier, 1)
 
 
 def stimulus(n, seq):
-    """return frame seq's slope vector of length n"""
     return [((seq + i) % 1024) * 0.001 for i in range(n)]
 
 
 def build(slopes, acts, modes, alpha):
-    """build the operator's V, U and singular values"""
     vt = [[reconstruct_val(TAG_V, k, i) for i in range(slopes)] for k in range(modes)]
     u = [[reconstruct_val(TAG_U, k, a) for a in range(acts)] for k in range(modes)]
     s = [math.pow(k + 1, -alpha) for k in range(modes)]
@@ -64,7 +53,6 @@ def build(slopes, acts, modes, alpha):
 
 
 def apply(vt, u, s, acts, m, x):
-    """apply the first m modes of the operator to x"""
     cmd = [0.0] * acts
     for k in range(m):
         v = vt[k]
@@ -76,7 +64,6 @@ def apply(vt, u, s, acts, m, x):
 
 
 def relerr(vt, u, s, acts, modes, tier, nstim, slopes):
-    """return a tier's relative error against the full rank over nstim stimuli"""
     num = den = 0.0
     full = tier_modes(modes, 0)
     kept = tier_modes(modes, tier)
@@ -95,7 +82,6 @@ OBS = re.compile(r"(\w+)=([-\d.]+)")
 
 
 def run_c(slopes, acts, modes, alpha, reps, stim, binary=BIN, curve=False):
-    """run the binary's quality stage and parse its OBS and CURVE lines"""
     argv = [str(binary), "--stage", "quality", "--tag", "qual",
             "--slopes", str(slopes), "--acts", str(acts), "--modes", str(modes),
             "--alpha", str(alpha), "--frames", str(reps), "--stim", str(stim)]
@@ -116,21 +102,18 @@ def run_c(slopes, acts, modes, alpha, reps, stim, binary=BIN, curve=False):
         out["_curve"] = [pts[m] for m in sorted(pts)]
     missing = [f"tier{t}_relerr" for t in range(TIERS) if f"tier{t}_relerr" not in out]
     if missing:
-        raise SystemExit(f"quality: the binary reported no {', '.join(missing)}")
+        raise SystemExit(f"quality: missing {', '.join(missing)}")
     return out
 
 
 def check(slopes, acts, alpha, reps, stim_pub, stim_check, binary=BIN, quiet=False,
           block=16):
-    """return the tier table, or exit naming what disagreed"""
     modes = auto_modes(slopes, acts)
     published = run_c(slopes, acts, modes, alpha, reps, stim_pub, binary, curve=True)
     cross = run_c(slopes, acts, modes, alpha, 1, stim_check, binary)
 
     if published["quality_modes"] != modes:
-        raise SystemExit(
-            f"quality: the binary chose {published['quality_modes']} modes where this "
-            f"implementation of the same rule chose {modes}")
+        raise SystemExit(f"quality: modes {published['quality_modes']} != {modes}")
 
     vt, u, s = build(slopes, acts, modes, alpha)
 
@@ -141,9 +124,7 @@ def check(slopes, acts, alpha, reps, stim_pub, stim_check, binary=BIN, quiet=Fal
         d = abs(mine - theirs)
         worst = max(worst, d)
         if d > RELERR_TOL:
-            raise SystemExit(
-                f"quality: tier {t} relative error {theirs:.9f} from the binary, {mine:.9f} "
-                f"rebuilt; apart by {d:.2e} (tolerance {RELERR_TOL:.0e})")
+            raise SystemExit(f"quality: tier {t} relerr {theirs:.9f} vs {mine:.9f}")
         rows.append({
             "tier": t,
             "modes": published[f"tier{t}_modes"],
@@ -158,9 +139,9 @@ def check(slopes, acts, alpha, reps, stim_pub, stim_check, binary=BIN, quiet=Fal
 
     for a, b in zip(rows, rows[1:]):
         if b["macs"] >= a["macs"]:
-            raise SystemExit(f"quality: tier {b['tier']} does not cost less than tier {a['tier']}")
+            raise SystemExit(f"quality: tier {b['tier']} macs >= tier {a['tier']}")
         if b["relerr"] <= a["relerr"]:
-            raise SystemExit(f"quality: tier {b['tier']} is not worse than tier {a['tier']}")
+            raise SystemExit(f"quality: tier {b['tier']} relerr <= tier {a['tier']}")
 
     sys.path.insert(0, str(ROOT))
     from benchmark import lib
@@ -170,24 +151,19 @@ def check(slopes, acts, alpha, reps, stim_pub, stim_check, binary=BIN, quiet=Fal
     worst_mode_step = 0.0
     if curve is not None:
         if len(curve) != modes + 1:
-            raise SystemExit(f"quality: the curve has {len(curve)} points for {modes} modes")
+            raise SystemExit(f"quality: curve {len(curve)} != {modes}+1")
         if abs(curve[modes]) > 1e-12:
-            raise SystemExit(f"quality: stopping at every mode is not the reference: "
-                             f"curve[{modes}]={curve[modes]}")
+            raise SystemExit(f"quality: curve[{modes}]={curve[modes]}")
         for r in rows:
             c = curve[r["modes"]]
             if abs(c - r["relerr"]) > RELERR_TOL:
-                raise SystemExit(
-                    f"quality: tier {r['tier']} at {r['modes']} modes reports error "
-                    f"{r['relerr']:.9f}, the curve says {c:.9f}")
+                raise SystemExit(f"quality: tier {r['tier']} relerr {r['relerr']:.9f} vs curve {c:.9f}")
         step = [b - a for a, b in zip(curve, curve[1:])]
         worst_mode_step = max(step) if step else 0.0
         stops = list(range(block, modes, block)) + [modes]
         for m0, m1 in zip(stops, stops[1:]):
             if curve[m1] > curve[m0]:
-                raise SystemExit(
-                    f"quality: stopping at {m1} modes is worse than at {m0} "
-                    f"({curve[m1]:.9f} > {curve[m0]:.9f})")
+                raise SystemExit(f"quality: curve[{m1}] > curve[{m0}]")
 
     table = {
         "slopes": slopes, "acts": acts, "modes": modes, "alpha": alpha,
@@ -205,40 +181,34 @@ def check(slopes, acts, alpha, reps, stim_pub, stim_check, binary=BIN, quiet=Fal
         "tiers": rows,
     }
     if not quiet:
-        print(f"geometry slopes={slopes} acts={acts} modes={modes} alpha={alpha}  "
-              f"dense would be {published['quality_dense_macs']} macs, tier 0 is "
-              f"{rows[0]['macs']}")
+        print(f"slopes={slopes} acts={acts} modes={modes} alpha={alpha} "
+              f"dense_macs={published['quality_dense_macs']}")
         print(f"{'tier':>4} {'modes':>6} {'macs':>9} {'cost/t0':>8} {'macs/t0':>8} "
               f"{'p50_ns':>9} {'rel err':>9}")
         for r in rows:
             print(f"{r['tier']:>4} {r['modes']:>6} {r['macs']:>9} {r['cost_ratio']:>8.4f} "
                   f"{r['mac_ratio']:>8.4f} {r['p50_ns']:>9} {r['relerr']:>9.6f}")
-        print(f"cross-check over {stim_check} stimuli in double precision: "
-              f"worst disagreement {worst:.2e} (tolerance {RELERR_TOL:.0e})")
-        print(f"host {table['verdict']}: {table['verdict_reason']} (load1 {table['load1']:.2f}) "
-              f"-- the error column is arithmetic, the ns columns are not")
+        print(f"worst {worst:.2e} tol {RELERR_TOL:.0e}")
+        print(f"host {table['verdict']}: {table['verdict_reason']} load1={table['load1']:.2f}")
     return table
 
 
 def selftest():
-    """make each refusal in check fire on a constructed input"""
     import tempfile
     failures = []
 
     def expect_refusal(what, fn):
-        """record a failure if fn does not exit"""
         try:
             fn()
         except SystemExit as e:
             print(f"  refused {what}: {str(e)[:100]}")
             return
         failures.append(what)
-        print(f"  ACCEPTED {what} -- the check does not fire")
+        print(f"  ACCEPTED {what}")
 
     orig = globals()["reconstruct_hash"]
 
     def drifted(tag, i, j):
-        """hash as reconstruct_hash does with a constant changed"""
         x = (tag * 0x9E3779B1 + i * 0x85EBCA77 + j * 0xC2B2AE3D + 0x27D4EB2F) & M32
         x ^= x >> 16
         x = (x * 0x7FEB352F) & M32
@@ -248,7 +218,7 @@ def selftest():
         return x
 
     globals()["reconstruct_hash"] = drifted
-    expect_refusal("a rebuilt operator that does not match the binary",
+    expect_refusal("reconstruct_hash drifted: refused",
                    lambda: check(200, 50, 1.0, 200, 4, 4, quiet=True))
     globals()["reconstruct_hash"] = orig
 
@@ -261,13 +231,13 @@ def selftest():
         "    print(f'OBS tier{t}_modes=40 tier{t}_macs=10000 tier{t}_min_ns=1 "
         "tier{t}_p50_ns=1 tier{t}_p99_ns=1 tier{t}_cost_ratio=1.0 tier{t}_relerr=0.0')\n")
     fake.chmod(0o755)
-    expect_refusal("a table whose tiers all cost the same",
+    expect_refusal("tier costs equal: refused",
                    lambda: check(200, 50, 1.0, 200, 4, 4, binary=fake, quiet=True))
 
     empty = fake.parent / "empty"
     empty.write_text("#!/usr/bin/env python3\nprint('OBS quality_modes=40')\n")
     empty.chmod(0o755)
-    expect_refusal("a binary that reports no tiers",
+    expect_refusal("no tier lines: refused",
                    lambda: check(200, 50, 1.0, 200, 4, 4, binary=empty, quiet=True))
 
     wrong = fake.parent / "wrongrank"
@@ -278,7 +248,7 @@ def selftest():
         "    print(f'OBS tier{t}_modes=41 tier{t}_macs={10000>>t} tier{t}_min_ns=1 "
         "tier{t}_p50_ns=1 tier{t}_p99_ns=1 tier{t}_cost_ratio=1.0 tier{t}_relerr={t*0.01}')\n")
     wrong.chmod(0o755)
-    expect_refusal("a binary that chose a different full rank",
+    expect_refusal("quality_modes=41: refused",
                    lambda: check(200, 50, 1.0, 200, 4, 4, binary=wrong, quiet=True))
 
     real = subprocess.run(
@@ -295,60 +265,57 @@ def selftest():
     nonmono = fake.parent / "nonmono"
     nonmono.write_text("#!/usr/bin/env python3\nprint(r\"\"\"" + "\n".join(lines) + "\"\"\")\n")
     nonmono.chmod(0o755)
-    expect_refusal("a curve where more modes deliver a worse command",
+    expect_refusal("CURVE non-monotone at m=24: refused",
                    lambda: check(200, 50, 1.0, 200, 4, 4, binary=nonmono, quiet=True, block=8))
 
     if failures:
-        print(f"selftest: {len(failures)} check(s) did not fire: {failures}")
+        print(f"selftest: not fired {failures}")
         return 1
-    print("selftest: every refusal fired")
+    print("selftest: ok")
     return 0
 
 
 def main():
-    """parse arguments and run the selftest, the dry run or the check"""
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--slopes", type=int, default=2400)
     p.add_argument("--acts", type=int, default=600)
     p.add_argument("--alpha", type=float, default=1.0)
     p.add_argument("--reps", type=int, default=2000,
-                   help="timed applies per tier")
+                   help="per tier")
     p.add_argument("--stim", type=int, default=1024,
-                   help="stimuli the error is averaged over")
+                   help="stimuli")
     p.add_argument("--check-stim", type=int, default=2,
-                   help="stimuli the double-precision rebuild checks")
+                   help="cross-check stimuli")
     p.add_argument("--block", type=int, default=16,
-                   help="modes between the loop's clock reads")
+                   help="modes per clock read")
     p.add_argument("--freeze", action="store_true",
                    help=f"write {FROZEN.name}")
     p.add_argument("--selftest", action="store_true")
-    p.add_argument("--dry-run", action="store_true",
-                   help="check the arguments and binary only")
+    p.add_argument("--dry-run", action="store_true")
     a = p.parse_args()
 
     if a.selftest:
         return selftest()
     if a.dry_run:
-        bad = [f"--{n} must be positive" for n, v in (("slopes", a.slopes), ("acts", a.acts), ("reps", a.reps), ("stim", a.stim),
+        bad = [f"--{n} < 1" for n, v in (("slopes", a.slopes), ("acts", a.acts), ("reps", a.reps), ("stim", a.stim),
                                                       ("check-stim", a.check_stim), ("block", a.block)) if v < 1]
         for b in bad:
             print(f"quality: REFUSED -- {b}", file=sys.stderr)
-        print(f"quality: dry run -- {a.reps} reps per tier at {a.slopes} x {a.acts}, stim {a.stim}, "
-              f"check-stim {a.check_stim}, block {a.block}; nothing was timed")
+        print(f"quality: dry run -- reps={a.reps} slopes={a.slopes} acts={a.acts} stim={a.stim} "
+              f"check-stim={a.check_stim} block={a.block}")
         if not BIN.exists():
-            print(f"quality: host prerequisite you supply -- {BIN} is not built (make)")
+            print(f"quality: host prerequisite you supply -- {BIN} not built")
         return 1 if bad else 0
     if not BIN.exists():
-        raise SystemExit(f"quality: {BIN} is not built")
+        raise SystemExit(f"quality: {BIN} not built")
 
     table = check(a.slopes, a.acts, a.alpha, a.reps, a.stim, a.check_stim, block=a.block)
     if a.freeze:
         from benchmark import lib
         topo = lib.host_topology()
         if topo["topology"] not in lib.PUBLISHED_TOPOLOGIES:
-            raise SystemExit(f"quality: host topology is {topo['topology']} ({topo['why']}); "
-                             f"refusing to freeze the published {FROZEN.name}")
+            raise SystemExit(f"quality: topology {topo['topology']} ({topo['why']}), no freeze")
         FROZEN.parent.mkdir(exist_ok=True)
         FROZEN.write_text(json.dumps(table, indent=2) + "\n")
         print(f"froze {FROZEN.relative_to(ROOT)}")

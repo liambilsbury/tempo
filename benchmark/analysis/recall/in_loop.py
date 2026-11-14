@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""Score the in-loop detector against L1's exit time
-
-Usage: in_loop.py [--paired F] [--control LABEL] [--freeze] [--selftest]"""
-
 import argparse
 import json
 import sys
@@ -20,7 +16,6 @@ COMPUTE_VCPU = 1
 
 
 def header_of(outdir):
-    """parse the guest header of a run"""
     f = Path(outdir) / "l2" / "header.txt"
     if not f.exists():
         return {}
@@ -34,7 +29,6 @@ def header_of(outdir):
 
 
 def one(outdir, vcpu=COMPUTE_VCPU):
-    """return a run's fractions, or None when a needed input is missing"""
     h, m = header_of(outdir), inject_meta(outdir)
     if not h or not m:
         return None
@@ -72,7 +66,6 @@ def one(outdir, vcpu=COMPUTE_VCPU):
 
 
 def gather(paired_path, vcpu=COMPUTE_VCPU):
-    """collect the per-round fractions of each class in a paired file"""
     rounds = json.loads((ROOT / paired_path).read_text())["rounds"]
     labels = sorted({k for r in rounds for k in r})
     out = {}
@@ -89,7 +82,6 @@ def gather(paired_path, vcpu=COMPUTE_VCPU):
 
 
 def paired_recall(rows, ctl):
-    """return the recall of each round with the control round subtracted"""
     by_round = {r["round"]: r for r in ctl}
     out = []
     for r in rows:
@@ -107,7 +99,6 @@ def paired_recall(rows, ctl):
 
 
 def verdict(paired_path="results/earlier_phase/paired/paired-inloop.json", frozen=None, control="control"):
-    """return the frozen verdict, or compute the per-class recalls"""
     src = frozen or FROZEN
     if frozen is not False and Path(src).exists():
         return json.loads(Path(src).read_text())
@@ -138,7 +129,6 @@ def verdict(paired_path="results/earlier_phase/paired/paired-inloop.json", froze
 
 
 def report(paired_path, control="control"):
-    """print the per-class table and return the verdict"""
     data = gather(paired_path)
     ctl = data.get(control, [])
     hdr = (f"{'class':10} {'n':>3} {'outside %':>10} {'+idle %':>8} {'detector %':>11} "
@@ -155,31 +145,28 @@ def report(paired_path, control="control"):
               f"{median([x['duty'] for x in rows]):>7.3f} "
               f"{median([x['overlap'] for x in rows]):>8.3f} {r:>20}")
     v = verdict(paired_path, frozen=False, control=control)
-    print(f"\nin-loop detector recall, control subtracted: "
-          f"{v['detector'] if v['detector'] is None else round(v['detector'], 4)} over {v['n']} "
-          f"condition-rounds")
+    print(f"\nrecall {v['detector'] if v['detector'] is None else round(v['detector'], 4)} n={v['n']}")
     return v
 
 
 def selftest():
-    """check that runs missing an input are dropped"""
     import tempfile
     ok = True
     d = Path(tempfile.mkdtemp())
     (d / "l2").mkdir()
 
     cases = {
-        "a run with no header at all": ("", ""),
-        "a run whose loop carried no detector": (
+        "header empty": ("", ""),
+        "no inloop_* fields": (
             "steal_before=1\nsteal_after=2\nbytes=0\n", "INJECT watched_wall_ns=1000\n"),
-        "a run with a detector but no injector metadata": (
+        "inject.meta empty": (
             "inloop_gap_sum_ns=100\ninloop_observed_ns=1000\n", ""),
     }
     for name, (hdr, meta) in cases.items():
         (d / "l2" / "header.txt").write_text(hdr)
         (d / "inject.meta").write_text(meta)
         if one(d) is not None:
-            print(f"  ACCEPTED {name} -- the check does not fire")
+            print(f"  ACCEPTED {name}")
             ok = False
         else:
             print(f"  dropped {name}")
@@ -189,22 +176,20 @@ def selftest():
                                    "watched_window_end_ns=1000\n")
     (d / "exits.txt").write_text("")
     if one(d) is not None:
-        print("  ACCEPTED a run with no exit counter")
+        print("  ACCEPTED exits.txt empty")
         ok = False
     else:
-        print("  dropped a run with no exit counter")
+        print("  dropped exits.txt empty")
 
-    print("selftest: " + ("every refusal fired" if ok else "a refusal did not fire"))
+    print("selftest: " + ("ok" if ok else "FAILED"))
     return 0 if ok else 1
 
 
 def main():
-    """report, freeze or run the selftest"""
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--paired", default="results/earlier_phase/paired/paired-inloop.json")
-    ap.add_argument("--control", default="control",
-                    help="label of the no-injection arm")
+    ap.add_argument("--control", default="control")
     ap.add_argument("--freeze", action="store_true")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()

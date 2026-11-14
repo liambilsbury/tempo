@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Append completed experiment directories to the fact table by topology"""
-
 import argparse
 import csv
 import struct
@@ -15,7 +13,6 @@ EXPERIMENTS = lib.ROOT / "results" / "experiments"
 
 
 def kv(path):
-    """parse the key=value tokens of a meta file"""
     out = {}
     if not Path(path).exists():
         return out
@@ -28,7 +25,6 @@ def kv(path):
 
 
 def guest_config(d):
-    """read the arm the guest ran from its startup console line"""
     con = Path(d) / "l2" / "console.log"
     out = {}
     if not con.exists():
@@ -44,7 +40,6 @@ def guest_config(d):
 
 
 def frames_of(path):
-    """read the telemetry records of a run"""
     if not Path(path).exists():
         return []
     raw = Path(path).read_bytes()
@@ -52,7 +47,6 @@ def frames_of(path):
 
 
 def existing_keys(table):
-    """return the (run_id, config_id) pairs already in a table"""
     p = lib.RESULTS / table
     if not p.exists():
         return set()
@@ -61,7 +55,6 @@ def existing_keys(table):
 
 
 def build_row(d):
-    """build the fact table row and verdict of a run directory"""
     meta = kv(d / "inject.meta")
     hdr = kv(d / "l2" / "header.txt")
     frames = frames_of(d / "l2" / "telemetry.bin")
@@ -166,14 +159,13 @@ def build_row(d):
 
 
 def main():
-    """append or list the new rows of every experiment directory"""
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--table", default="results.tsv")
     args = ap.parse_args()
 
     if not EXPERIMENTS.exists():
-        print("no experiments to ingest")
+        print("no experiments")
         return 0
     have = {}
     rows, skipped = [], 0
@@ -195,17 +187,17 @@ def main():
         for table, r in rows:
             print(f"{r['run_id']:22} {r['config_id']:12} {r['verdict']:6} "
                   f"n={r['records']} p999={r['lat_p999_ns']} -> {table}")
-        print(f"{len(rows)} to ingest, {skipped} already present")
+        print(f"new={len(rows)} present={skipped}")
         return 0
 
     if not rows:
-        print(f"nothing new, {skipped} already present")
+        print(f"new=0 present={skipped}")
         return 0
     for table in sorted({t for t, _ in rows}):
         mine = [r for t, r in rows if t == table]
         out = lib.append_rows(mine, table)
         green = sum(1 for r in mine if r["verdict"] == "GREEN")
-        print(f"ingested {len(mine)} rows ({green} GREEN, {len(mine)-green} RED) -> {out}")
+        print(f"ingested {len(mine)} GREEN={green} RED={len(mine)-green} -> {out}")
     return 0
 
 

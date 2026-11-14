@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-2.0
-// expose the KVM steal counter in ns through /proc/tempo_steal and /dev/tempo_steal
 
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -15,7 +14,6 @@
 
 #define TEMPO_MAX_CPUS 64
 
-// steal time address of a CPU
 struct tempo_cpu {
 	u64 gpa;
 	bool enabled;
@@ -24,7 +22,6 @@ struct tempo_cpu {
 static struct tempo_cpu tempo_cpus[TEMPO_MAX_CPUS];
 static int tempo_ncpu;
 
-// read a CPU's steal time address from MSR_KVM_STEAL_TIME
 static int tempo_probe_cpu(int cpu)
 {
 	u64 val = 0;
@@ -38,7 +35,6 @@ static int tempo_probe_cpu(int cpu)
 	return 0;
 }
 
-// read a CPU's steal value under the version seqlock
 static u64 tempo_read_steal(int cpu)
 {
 	struct kvm_steal_time *st;
@@ -58,7 +54,6 @@ static u64 tempo_read_steal(int cpu)
 	return steal;
 }
 
-// print a line per CPU
 static int tempo_show(struct seq_file *m, void *v)
 {
 	int cpu;
@@ -74,7 +69,6 @@ static int tempo_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-// open /proc/tempo_steal
 static int tempo_open(struct inode *inode, struct file *file)
 {
 	return single_open(file, tempo_show, NULL);
@@ -87,7 +81,6 @@ static const struct proc_ops tempo_proc_ops = {
 	.proc_release = single_release,
 };
 
-// map a CPU's steal page read-only
 static int tempo_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	unsigned long cpu = vma->vm_pgoff;
@@ -120,13 +113,12 @@ static struct miscdevice tempo_misc = {
 	.mode = 0444,
 };
 
-// probe every CPU and register the device and the proc file
 static int __init tempo_init(void)
 {
 	int cpu, found = 0, rc;
 
 	if (!kvm_para_available()) {
-		pr_err("tempo_steal: not running under KVM paravirt; nothing to expose\n");
+		pr_err("tempo_steal: no KVM paravirt\n");
 		return -ENODEV;
 	}
 	tempo_ncpu = min_t(int, num_possible_cpus(), TEMPO_MAX_CPUS);
@@ -134,7 +126,7 @@ static int __init tempo_init(void)
 		if (!tempo_probe_cpu(cpu))
 			found++;
 	if (!found) {
-		pr_err("tempo_steal: MSR_KVM_STEAL_TIME not enabled on any cpu\n");
+		pr_err("tempo_steal: no MSR_KVM_STEAL_TIME\n");
 		return -ENODEV;
 	}
 
@@ -145,12 +137,11 @@ static int __init tempo_init(void)
 		misc_deregister(&tempo_misc);
 		return -ENOMEM;
 	}
-	pr_info("tempo_steal: %d of %d cpus expose a nanosecond steal counter\n",
+	pr_info("tempo_steal: %d/%d cpus\n",
 		found, tempo_ncpu);
 	return 0;
 }
 
-// remove the proc file and the device
 static void __exit tempo_exit(void)
 {
 	remove_proc_entry("tempo_steal", NULL);
@@ -161,4 +152,4 @@ module_init(tempo_init);
 module_exit(tempo_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("expose the guest's nanosecond KVM steal counter, which /proc/stat truncates to USER_HZ");
+MODULE_DESCRIPTION("KVM steal counter");
